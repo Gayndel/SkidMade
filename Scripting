@@ -1,5 +1,5 @@
 -- ═══════════════════════════════════════════════════════════════
--- GYM BASKETBALL OP v8.8 - Optimized Edition
+-- GYM BASKETBALL OP v8.9 - FPS Optimized Edition
 -- Auto Farm + Defense + Queue | Config System
 -- ═══════════════════════════════════════════════════════════════
 
@@ -250,15 +250,29 @@ local function getLooseBall()
     if not root then return nil end
     local hoopPos = getHoopPosition()
     if not hoopPos then return nil end
+    
+    local courtName = char:GetAttribute("InGame")
+    local searchArea = workspace
+    
+    -- FPS FIX: Only searches for the ball inside your specific court to prevent lag
+    if courtName and courtName ~= "" then
+        local courts = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Courts")
+        if courts and courts:FindFirstChild(courtName) then
+            searchArea = courts[courtName]
+        end
+    end
+
     local nearest, dist = nil, math.huge
-    for _, obj in pairs(workspace:GetDescendants()) do
+    for _, obj in pairs(searchArea:GetDescendants()) do
         if obj.Name == "Ball" and obj:IsA("BasePart") and not obj.Anchored then
             local parentName = obj.Parent and obj.Parent.Name or ""
             if parentName == "AnimRig" or parentName == "AnimationRig" then continue end
+            
             local held = false
             for _, p in pairs(Players:GetPlayers()) do
                 if p.Character and p.Character:FindFirstChild("Ball") == obj then held = true; break end
             end
+            
             if not held then
                 local ballToHoop = (obj.Position - hoopPos).Magnitude
                 if ballToHoop > 60 then continue end
@@ -301,12 +315,10 @@ local function getRealTiming(c, rawTiming)
     
     local isPerfect = false
     
-    -- Check backend attributes that might signify a perfect 100% shot
     local perc = tonumber(c:GetAttribute("ShotPercentage")) or tonumber(c:GetAttribute("Percentage"))
     if perc and perc >= 100 then isPerfect = true end
     if c:GetAttribute("Green") == true then isPerfect = true end
     
-    -- Check PlayerGui directly if the attribute was capped at "Good"
     if not isPerfect then
         pcall(function()
             local pgui = Player:FindFirstChild("PlayerGui")
@@ -335,7 +347,6 @@ local function adjustTiming(timing, shotType)
     local old = HoldTimes[shotType] or 0.45
     local delta = 0
     
-    -- Specific requested timing adjustments exactly as asked
     if t == "very early" then delta = 0.08
     elseif t == "early" then delta = 0.05
     elseif t == "slightly early" then delta = 0.01
@@ -345,7 +356,6 @@ local function adjustTiming(timing, shotType)
     end
 
     if delta ~= 0 then
-        -- Only overwrites the exact shot type taken
         HoldTimes[shotType] = math.clamp(old + delta, 0.15, 2.0)
     end
     return delta
@@ -356,7 +366,6 @@ local function handleShotResult(c, holdTime, shotType)
     if not rawTiming then return end
     if string.lower(rawTiming) == "default" then return end
 
-    -- Bypasses the "Good" glitch by reading your actual screen text
     local realTiming = getRealTiming(c, rawTiming)
 
     local delta = 0
@@ -366,7 +375,6 @@ local function handleShotResult(c, holdTime, shotType)
         HoldTimes[shotType] = holdTime
         Flags.ScoreTracker = Flags.ScoreTracker + 1
     elseif Flags.SmartAI then
-        -- Adjust timing purely off the raw game attribute
         delta = adjustTiming(rawTiming, shotType)
     end
 
@@ -392,10 +400,7 @@ local function executeShot(holdTimeOverride)
     ShotState.InProgress = true
     ShotState.ReboundDebounce = true
     
-    -- Captures specific shot type immediately upon shooting
     ShotState.LastType = getShotType()
-    
-    -- Dynamically applies timing strictly for the captured shot type
     local holdTime = holdTimeOverride or HoldTimes[ShotState.LastType] or 0.45
 
     pcall(function() ActionRemote:FireServer({ Type = "Shoot", Shoot = true, HoldingQ = UserInputService:IsKeyDown(Enum.KeyCode.Q), HoldingL1 = false }) end)
@@ -409,7 +414,7 @@ local function executeShot(holdTimeOverride)
         local timeout = tick() + 4
         repeat task.wait(0.05) until c:GetAttribute("Released") == true or tick() > timeout or not c.Parent
         
-        task.wait(0.1) -- Ensure GUI has populated its PERFECT/100% text before scanning
+        task.wait(0.1) 
         handleShotResult(c, holdTime, ShotState.LastType)
         task.wait(1.5)
         ShotState.ReboundDebounce = false
@@ -429,7 +434,7 @@ task.spawn(function()
         local rawTiming = c:GetAttribute("Timing")
         
         if released and rawTiming and string.lower(rawTiming) ~= "default" and Flags.ShotFeedbackHUD then
-            task.wait(0.1) -- Yield slightly to ensure the GUI has updated its text to "PERFECT" or "100%"
+            task.wait(0.1) 
             local realTiming = getRealTiming(c, rawTiming)
             local shotType = getShotType()
             
@@ -507,13 +512,14 @@ local function ToggleAutoFarm(v)
     if v then
         task.spawn(function()
             while Flags.AutoFarm do
-                task.wait()
+                task.wait(0.15) -- FPS FIX: Throttle the core loop so it doesn't max CPU usage
+                
                 local c = Player.Character
                 local root = getRoot(c)
                 if not root or not isActuallyPlaying(c) or ShotState.InProgress or ShotState.Paused then
-                    task.wait(0.5); continue
+                    continue
                 end
-                if tick() - inGameStamp < 3 then task.wait(0.3); continue end
+                if tick() - inGameStamp < 3 then continue end
 
                 local moveToPoint = c:GetAttribute("MoveToPoint")
                 if moveToPoint and moveToPoint ~= Vector3.new(0, 0, 0) then
@@ -526,7 +532,6 @@ local function ToggleAutoFarm(v)
                             local hum = getHum(c)
                             if hum then hum:MoveTo(target) end
                         end
-                        task.wait(0.2)
                         continue
                     end
                 end
@@ -560,7 +565,6 @@ local function ToggleAutoFarm(v)
                             if dist > 3.5 then
                                 local hum = getHum(c)
                                 if hum then hum:MoveTo(targetPos) end
-                                task.wait(0.1)
                                 continue
                             else
                                 root.AssemblyLinearVelocity = Vector3.zero
@@ -1027,4 +1031,4 @@ task.spawn(function()
     end
 end)
 
-Library:Notify({ Title = "Gym Basketball OP v8.8", Description = "LCtrl to toggle UI.", Duration = 5 })
+Library:Notify({ Title = "Gym Basketball OP v8.9", Description = "LCtrl to toggle UI.", Duration = 5 })
