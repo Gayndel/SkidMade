@@ -423,7 +423,7 @@ local Window = Library:CreateWindow({
     Size          = UDim2.fromOffset(620, 500),
     Center        = true,
     AutoShow      = false,
-    ToggleKeybind = Enum.KeyCode.LeftControl,
+    ToggleKeybind = Enum.KeyCode.leftControl,
 })
 
 -- AUTO FARM
