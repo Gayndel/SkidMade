@@ -769,17 +769,30 @@ local function ToggleAutoStart(v) Flags.AutoStart = v end
 -- ═══════════════════════════════════════════════════════════════
 -- WINDOW UI
 -- ═══════════════════════════════════════════════════════════════
-local preHide = Flags.AutoHide
+local preHide = false
 pcall(function()
-    if isfile and isfile("GymBballConfigs/Autoload.txt") then
-        local autoName = readfile("GymBballConfigs/Autoload.txt")
-        if autoName and autoName ~= "" then
-            local cfgPath = "GymBballConfigs/" .. autoName .. ".json"
-            if isfile(cfgPath) then
-                local data = HttpService:JSONDecode(readfile(cfgPath))
-                if data and data.Flags and type(data.Flags.AutoHide) == "boolean" then
-                    preHide = data.Flags.AutoHide
-                end
+    local autoLoadPath = "GymBballConfigs/Autoload.txt"
+    local autoName = nil
+    
+    pcall(function()
+        if isfile and isfile(autoLoadPath) then autoName = readfile(autoLoadPath) 
+        elseif not isfile then autoName = readfile(autoLoadPath) end
+    end)
+    
+    if autoName and autoName ~= "" then
+        autoName = autoName:gsub("[\n\r]", "")
+        local cfgPath = "GymBballConfigs/" .. autoName .. ".json"
+        local fileData = nil
+        
+        pcall(function()
+            if isfile and isfile(cfgPath) then fileData = readfile(cfgPath)
+            elseif not isfile then fileData = readfile(cfgPath) end
+        end)
+        
+        if fileData then
+            local data = HttpService:JSONDecode(fileData)
+            if data and data.Flags and data.Flags.AutoHide == true then
+                preHide = true
             end
         end
     end
