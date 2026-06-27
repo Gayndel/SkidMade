@@ -1,5 +1,5 @@
 -- ═══════════════════════════════════════════════════════════════
--- GYM BASKETBALL OP v8.11 - Queue Logic Fix
+-- GYM BASKETBALL OP v8.12 - Config System Overhaul
 -- Auto Farm + Defense + Queue | Config System
 -- ═══════════════════════════════════════════════════════════════
 
@@ -622,9 +622,8 @@ local function ToggleAutoMatch(v)
                 if isActuallyPlaying(c) then continue end
                 if tick() - outGameStamp < 4 then continue end
                 
-                -- Check dynamic queue status on every loop iteration
                 local isQueued = c:GetAttribute("Queued") or c:GetAttribute("InQueue") or (c:GetAttribute("State") == "Queue")
-                if isQueued then continue end -- Skips execution if currently in the queue
+                if isQueued then continue end 
 
                 local spot = get1v1Spot()
                 if spot and (tick() - lastQueueAttempt > 5) then
@@ -858,13 +857,21 @@ UI.Toggles["SpeedEnabled"] = MoveL:AddToggle("SpeedEnabled", { Text = "Speed Mod
 UI.Options["SpeedMult"] = MoveL:AddSlider("SpeedMult", { Text = "Speed Multiplier", Min = 1, Max = 3, Default = 1, Increment = 0.01, Rounding = 2, Callback = function(v) Flags.SpeedMult = v end })
 UI.Toggles["InfiniteStamina"] = MoveL:AddToggle("InfiniteStamina", { Text = "Infinite Stamina", Default = false, Callback = ToggleInfiniteStamina })
 
--- ═══ TAB 4: SETTINGS & CONFIG ═══
+-- ═══ TAB 4: SETTINGS & CONFIG SYSTEM (Overhauled) ═══
 local SetTab = Window:AddTab({ Name = "Settings", Icon = "settings-2" })
 local SetL   = SetTab:AddLeftGroupbox("Config System")
 local SetR   = SetTab:AddRightGroupbox("Misc")
 
 local ConfigFolder = "GymBballConfigs"
-pcall(function() if isfolder and not isfolder(ConfigFolder) then makefolder(ConfigFolder) end end)
+
+local function SafeMakeFolder(path)
+    pcall(function()
+        if isfolder and not isfolder(path) then makefolder(path)
+        elseif not isfolder then makefolder(path) end
+    end)
+end
+
+SafeMakeFolder(ConfigFolder)
 
 local function GetAvailableConfigs()
     local list = {}
@@ -882,6 +889,14 @@ local function GetAvailableConfigs()
 end
 
 local configList = GetAvailableConfigs()
+
+SetL:AddInput("NewConfigName", {
+    Text = "New Config Name",
+    Default = "",
+    Placeholder = "Type name to create...",
+    Callback = function(v) Flags.NewConfigName = v end
+})
+
 local ConfigDrop = SetL:AddDropdown("SelectedConfig", {
     Text = "Select Config",
     Values = #configList > 0 and configList or {""},
@@ -889,13 +904,6 @@ local ConfigDrop = SetL:AddDropdown("SelectedConfig", {
     Callback = function(v)
         if v ~= "" then Flags.ConfigName = v end
     end
-})
-
-SetL:AddInput("NewConfigName", {
-    Text = "New Config Name",
-    Default = "",
-    Placeholder = "Type name to create...",
-    Callback = function(v) Flags.NewConfigName = v end
 })
 
 local function RefreshDropdown()
@@ -916,14 +924,78 @@ local function RefreshDropdown()
 end
 
 local function getSavePath(name) return ConfigFolder .. "/" .. name .. ".json" end
-
 local SKIP_SAVE_KEYS = { ConfigName = true, NewConfigName = true, ScoreTracker = true }
 
+local function SaveConfigData(name)
+    if not name or name == "" then return false end
+    
+    local saveable = {}
+    for k, v in pairs(Flags) do
+        if not SKIP_SAVE_KEYS[k] and (type(v) == "boolean" or type(v) == "number" or type(v) == "string") then
+            saveable[k] = v
+        end
+    end
+
+    local config = { Flags = saveable, HoldTimes = HoldTimes, SavedSpots = {} }
+    
+    for k, v in pairs(SavedSpots) do
+        config.SavedSpots[k] = { 
+            position = v.position and {v.position.X, v.position.Y, v.position.Z} or {0,0,0}, 
+            scoreType = v.scoreType or 2, 
+            distance = v.distance or 30 
+        }
+    end
+
+    SafeMakeFolder(ConfigFolder)
+    local success, err = pcall(function()
+        writefile(getSavePath(name), HttpService:JSONEncode(config))
+    end)
+    
+    return success
+end
+
+SetL:AddButton({ Text = "Create Config", Func = function()
+    local name = Flags.NewConfigName
+    if not name or name == "" then
+        Library:Notify({ Title = "Error", Description = "Please enter a name in the text box above.", Duration = 3 })
+        return
+    end
+
+    if SaveConfigData(name) then
+        Library:Notify({ Title = "Created", Description = "Successfully created: " .. name, Duration = 3 })
+        Flags.ConfigName = name
+        RefreshDropdown()
+    else
+        Library:Notify({ Title = "File Error", Description = "Your executor blocks saving files.", Duration = 4 })
+    end
+end})
+
+SetL:AddButton({ Text = "Overwrite Selected Config", Func = function()
+    local name = Flags.ConfigName
+    if not name or name == "" then
+        Library:Notify({ Title = "Error", Description = "No config selected to overwrite.", Duration = 3 })
+        return
+    end
+
+    if SaveConfigData(name) then
+        Library:Notify({ Title = "Saved", Description = "Overwrote settings to: " .. name, Duration = 3 })
+    else
+        Library:Notify({ Title = "File Error", Description = "Your executor blocks saving files.", Duration = 4 })
+    end
+end})
+
 local function LoadConfigByName(name)
-    if not name or name == "" or name == "" then return false end
+    if not name or name == "" then return false end
     local file = getSavePath(name)
-    if not isfile or not isfile(file) then return false end
-    local ok, config = pcall(function() return HttpService:JSONDecode(readfile(file)) end)
+    
+    local success, fileData = pcall(function()
+        if isfile and not isfile(file) then return nil end
+        return readfile(file)
+    end)
+    
+    if not success or not fileData then return false end
+    
+    local ok, config = pcall(function() return HttpService:JSONDecode(fileData) end)
     if not ok or not config then return false end
 
     if config.Flags then
@@ -953,84 +1025,58 @@ local function LoadConfigByName(name)
     return true
 end
 
-SetL:AddButton({ Text = "Save Config", Func = function()
-    local name = (Flags.NewConfigName and Flags.NewConfigName ~= "") and Flags.NewConfigName or Flags.ConfigName
-    if not name or name == "" or name == "" then
-        Library:Notify({ Title = "Error", Description = "Type a config name first.", Duration = 3 })
-        return
-    end
-
-    local saveable = {}
-    for k, v in pairs(Flags) do
-        if not SKIP_SAVE_KEYS[k] and (type(v) == "boolean" or type(v) == "number" or type(v) == "string") then
-            saveable[k] = v
-        end
-    end
-
-    local config = { Flags = saveable, HoldTimes = HoldTimes, SavedSpots = {} }
-    for k, v in pairs(SavedSpots) do
-        config.SavedSpots[k] = { position = {v.position.X, v.position.Y, v.position.Z}, scoreType = v.scoreType, distance = v.distance }
-    end
-
-    pcall(function() if isfolder and not isfolder(ConfigFolder) then makefolder(ConfigFolder) end end)
-
-    if writefile then
-        writefile(getSavePath(name), HttpService:JSONEncode(config))
-        Library:Notify({ Title = "Config Saved", Description = "Saved: " .. name, Duration = 3 })
-        Flags.NewConfigName = ""
-        Flags.ConfigName = name
-        RefreshDropdown()
-    end
-end})
-
 SetL:AddButton({ Text = "Load Config", Func = function()
     local name = Flags.ConfigName
-    if not name or name == "" or name == "" then
+    if not name or name == "" then
         Library:Notify({ Title = "Error", Description = "Select a config first.", Duration = 3 })
         return
     end
     if LoadConfigByName(name) then
         Library:Notify({ Title = "Config Loaded", Description = "Loaded: " .. name, Duration = 3 })
     else
-        Library:Notify({ Title = "Error", Description = "Config not found: " .. name, Duration = 3 })
+        Library:Notify({ Title = "Error", Description = "Config corrupted or missing: " .. name, Duration = 3 })
     end
 end})
 
 SetL:AddButton({ Text = "Delete Config", Func = function()
     local name = Flags.ConfigName
-    if not name or name == "" or name == "" then return end
+    if not name or name == "" then return end
+    
     local file = getSavePath(name)
     pcall(function()
-        if delfile and isfile and isfile(file) then
-            delfile(file)
-            Library:Notify({ Title = "Deleted", Description = "Deleted: " .. name, Duration = 3 })
-        end
+        if delfile then delfile(file) end
     end)
+    
+    Library:Notify({ Title = "Deleted", Description = "Deleted config: " .. name, Duration = 3 })
     Flags.ConfigName = ""
     RefreshDropdown()
 end})
 
 SetL:AddButton({ Text = "Set as Auto-Load", Func = function()
     local name = Flags.ConfigName
-    if not name or name == "" or name == "" then
+    if not name or name == "" then
         Library:Notify({ Title = "Error", Description = "Select a config first.", Duration = 3 })
         return
     end
-    pcall(function() if isfolder and not isfolder(ConfigFolder) then makefolder(ConfigFolder) end end)
-    if writefile then
+    SafeMakeFolder(ConfigFolder)
+    
+    local success = pcall(function()
         writefile(ConfigFolder .. "/Autoload.txt", name)
+    end)
+    
+    if success then
         Library:Notify({ Title = "Auto-Load Set", Description = name .. " will load on next run.", Duration = 4 })
+    else
+        Library:Notify({ Title = "Error", Description = "Failed to set Auto-Load.", Duration = 3 })
     end
 end})
 
 SetL:AddButton({ Text = "Clear Auto-Load", Func = function()
-    pcall(function()
+    local success = pcall(function()
         local path = ConfigFolder .. "/Autoload.txt"
-        if delfile and isfile and isfile(path) then
-            delfile(path)
-            Library:Notify({ Title = "Auto-Load Cleared", Description = "No config will auto-load.", Duration = 3 })
-        end
+        if delfile then delfile(path) end
     end)
+    Library:Notify({ Title = "Auto-Load Cleared", Description = "No config will auto-load.", Duration = 3 })
 end})
 
 UI.Toggles["AutoHide"] = SetR:AddToggle("AutoHide", { Text = "Auto Hide on Execute", Default = Flags.AutoHide, Callback = function(v) Flags.AutoHide = v end })
@@ -1042,16 +1088,20 @@ Player.Idled:Connect(function() if Flags.AntiAFK then game:GetService("VirtualUs
 task.spawn(function()
     task.wait(1)
     local autoLoadPath = ConfigFolder .. "/Autoload.txt"
-    if isfile and isfile(autoLoadPath) then
-        local autoName = readfile(autoLoadPath)
-        if autoName and autoName ~= "" then
-            if LoadConfigByName(autoName) then
-                Flags.ConfigName = autoName
-                RefreshDropdown()
-                Library:Notify({ Title = "Auto-Load", Description = "Loaded profile: " .. autoName, Duration = 5 })
-            end
+    local autoName = nil
+    
+    pcall(function()
+        if isfile and isfile(autoLoadPath) then autoName = readfile(autoLoadPath) 
+        elseif not isfile then autoName = readfile(autoLoadPath) end
+    end)
+    
+    if autoName and autoName ~= "" then
+        if LoadConfigByName(autoName) then
+            Flags.ConfigName = autoName
+            RefreshDropdown()
+            Library:Notify({ Title = "Auto-Load", Description = "Loaded profile: " .. autoName, Duration = 5 })
         end
     end
 end)
 
-Library:Notify({ Title = "Gym Basketball OP v8.11", Description = "LCtrl to toggle UI.", Duration = 5 })
+Library:Notify({ Title = "Gym Basketball OP v8.12", Description = "LCtrl to toggle UI.", Duration = 5 })
