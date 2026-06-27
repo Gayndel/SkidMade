@@ -44,6 +44,7 @@ Flags.AutoMatch = false
 Flags.AutoGuard = false
 Flags.AutoSteal = false
 Flags.AutoTime = false
+Flags.AutoBallPickup = false
 Flags.StartHoldTime = Flags.StartHoldTime or 0.45
 
 if not Env._configLoaded then
@@ -249,9 +250,7 @@ local function getLooseBall()
     local root = getRoot(char)
     if not root then return nil end
     
-    -- We removed the hard 'return nil' here so it keeps searching even if you don't have a hoop yet.
     local hoopPos = getHoopPosition() 
-    
     local courtName = char:GetAttribute("InGame")
     local searchArea = workspace
     
@@ -264,25 +263,27 @@ local function getLooseBall()
 
     local nearest, dist = nil, math.huge
     for _, obj in pairs(searchArea:GetDescendants()) do
-        if obj.Name == "Ball" and obj:IsA("BasePart") and not obj.Anchored then
+        if (obj.Name == "Ball" or obj.Name == "Basketball") and obj:IsA("BasePart") and not obj.Anchored then
             local parentName = obj.Parent and obj.Parent.Name or ""
             if parentName == "AnimRig" or parentName == "AnimationRig" then continue end
+            if obj.Parent and obj.Parent:FindFirstChildOfClass("Humanoid") then continue end 
             
             local held = false
             for _, p in pairs(Players:GetPlayers()) do
-                if p.Character and p.Character:FindFirstChild("Ball") == obj then held = true; break end
+                if p.Character and (p.Character:FindFirstChild("Ball") == obj or p.Character:FindFirstChild("Basketball") == obj) then 
+                    held = true
+                    break 
+                end
             end
             
             if not held then
-                -- Only check hoop distance if a hoop is actually assigned
                 if hoopPos then
                     local ballToHoop = (obj.Position - hoopPos).Magnitude
-                    if ballToHoop > 100 then continue end
+                    if ballToHoop > 120 then continue end 
                 end
                 
-                -- Expanded the detection radius so it doesn't ignore balls on big courts
                 local d = (obj.Position - root.Position).Magnitude
-                if math.abs(obj.Position.Y - root.Position.Y) > 30 or d > 200 then continue end
+                if math.abs(obj.Position.Y - root.Position.Y) > 50 or d > 300 then continue end
                 
                 if d < dist then dist = d; nearest = obj end
             end
@@ -597,16 +598,50 @@ local function ToggleAutoFarm(v)
                             end
                         end
                     end
-                elseif not hasBall and not ShotState.ReboundDebounce and Flags.AutoBallPickup then
-                    local looseBall = getLooseBall()
-                    if looseBall then
-                        if Flags.FastTP then
-                            -- Teleport directly onto the ball instead of hovering 3 studs above it
-                            fastTP(looseBall.Position, false)
-                        else
-                            local hum = getHum(c)
-                            if hum then hum:MoveTo(looseBall.Position) end
-                        end
+                end
+            end
+        end)
+    end
+end
+
+-- NEW ISOLATED BALL RETRIEVAL LOOP
+local function ToggleAutoBallPickup(v)
+    Flags.AutoBallPickup = v
+    if v then
+        task.spawn(function()
+            while Flags.AutoBallPickup do
+                task.wait(0.15)
+                local c = Player.Character
+                if not c then continue end
+                
+                -- Skip if we already have the ball or recently shot
+                if c:FindFirstChild("Ball") then continue end
+                if ShotState.ReboundDebounce or ShotState.InProgress then continue end
+                
+                local looseBall = getLooseBall()
+                if looseBall then
+                    local root = getRoot(c)
+                    if not root then continue end
+
+                    if Flags.FastTP then
+                        -- Physics bypass fix: Teleport 2.5 studs away, then walk into it.
+                        local bPos = looseBall.Position
+                        local rPos = root.Position
+                        
+                        local flatDir = (Vector3.new(rPos.X, 0, rPos.Z) - Vector3.new(bPos.X, 0, bPos.Z))
+                        if flatDir.Magnitude < 0.1 then flatDir = Vector3.new(1, 0, 0) end
+                        local dir = flatDir.Unit
+                        
+                        fastTP(bPos + (dir * 2.5) + Vector3.new(0, 2.5, 0), false)
+                        
+                        -- Walk the rest of the way to force Touched collision
+                        local hum = getHum(c)
+                        if hum then hum:MoveTo(bPos) end
+                        
+                        task.wait(0.4) 
+                    else
+                        local hum = getHum(c)
+                        if hum then hum:MoveTo(looseBall.Position) end
                         task.wait(0.3)
                     end
                 end
@@ -812,7 +847,7 @@ FarmL:AddButton({ Text = "Save Current Pos to Spot", Func = function()
     if root then SavedSpots[Flags.FarmSpot].position = root.Position; Library:Notify({ Title = "Spot Saved", Description = Flags.FarmSpot .. ": " .. tostring(root.Position), Duration = 3 }) end
 end})
 UI.Toggles["FastTP"] = FarmL:AddToggle("FastTP", { Text = "Fast TP (Off = Natural Walk)", Default = false, Callback = function(v) Flags.FastTP = v end })
-UI.Toggles["AutoBallPickup"] = FarmL:AddToggle("AutoBallPickup", { Text = "Auto Ball Retrieval", Default = false, Callback = function(v) Flags.AutoBallPickup = v end })
+UI.Toggles["AutoBallPickup"] = FarmL:AddToggle("AutoBallPickup", { Text = "Auto Ball Retrieval", Default = false, Callback = ToggleAutoBallPickup })
 
 FarmL:AddDivider()
 UI.Toggles["TPAntiContest"] = FarmL:AddToggle("TPAntiContest", { Text = "TP-Up When Shooting", Default = false, Callback = ToggleTPAntiContest })
