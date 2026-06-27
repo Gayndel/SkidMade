@@ -15,6 +15,7 @@ getgenv().GymBball = getgenv().GymBball or {
         TPHoldTime = 0.5, AutoGuard = false, AutoSteal = false, GuardDistance = 1.5,
         GuardSpeed = 1, SpeedEnabled = false, SpeedMult = 1, Noclip = false,
         InfiniteStamina = false, AutoStart = false, AutoBallPickup = false,
+        BallMag = false, BallMagDistance = 50,
         AntiAFK = false, AntiStun = false, AntiAnkleBreak = false, AntiOOB = false,
         AutoMatch = false, Only1v1 = true, AutoHide = false,
         ConfigName = "", NewConfigName = "", ScoreTracker = 0
@@ -44,6 +45,7 @@ Flags.AutoMatch = false
 Flags.AutoGuard = false
 Flags.AutoSteal = false
 Flags.AutoTime = false
+Flags.BallMag = false
 Flags.StartHoldTime = Flags.StartHoldTime or 0.45
 
 if not Env._configLoaded then
@@ -261,9 +263,9 @@ local function getLooseBall()
             end
             if not held then
                 local ballToHoop = (obj.Position - hoopPos).Magnitude
-                if ballToHoop > 120 then continue end -- Expanded from 60 for better court-wide detection
+                if ballToHoop > 120 then continue end 
                 local d = (obj.Position - root.Position).Magnitude
-                if math.abs(obj.Position.Y - root.Position.Y) > 30 or d > 200 then continue end -- Expanded from 20 and 50 to grab balls further away
+                if math.abs(obj.Position.Y - root.Position.Y) > 30 or d > 200 then continue end 
                 if d < dist then dist = d; nearest = obj end
             end
         end
@@ -516,6 +518,37 @@ end
 -- ═══════════════════════════════════════════════════════════════
 -- DYNAMIC TOGGLES & LOOPS
 -- ═══════════════════════════════════════════════════════════════
+local function ToggleBallMag(v)
+    Flags.BallMag = v
+    if v then
+        task.spawn(function()
+            while Flags.BallMag do
+                task.wait(0.05)
+                local c = Player.Character
+                -- Don't magnetize if we already have the ball or are shooting
+                if not c or c:FindFirstChild("Ball") then continue end
+                if ShotState.InProgress or ShotState.ReboundDebounce then continue end
+                
+                local looseBall = getLooseBall()
+                if looseBall then
+                    local root = getRoot(c)
+                    if root then
+                        local dist = (looseBall.Position - root.Position).Magnitude
+                        if dist <= (Flags.BallMagDistance or 50) then
+                            pcall(function()
+                                if firetouchinterest then
+                                    firetouchinterest(root, looseBall, 0)
+                                    firetouchinterest(root, looseBall, 1)
+                                end
+                            end)
+                        end
+                    end
+                end
+            end
+        end)
+    end
+end
+
 local function ToggleAutoFarm(v)
     Flags.AutoFarm = v
     if v then
@@ -586,13 +619,12 @@ local function ToggleAutoFarm(v)
                     local looseBall = getLooseBall()
                     if looseBall then
                         if Flags.FastTP then
-                            -- Added a small Y offset so the character falls onto the ball, instantly triggering pickup
                             fastTP(looseBall.Position + Vector3.new(0, 1, 0), false)
                         else
                             local hum = getHum(c)
                             if hum then hum:MoveTo(looseBall.Position) end
                         end
-                        task.wait(0.05) -- Massively reduced from 0.3 to make ball retrieval lightning fast
+                        task.wait(0.05) 
                     end
                 end
             end
@@ -827,6 +859,8 @@ FarmL:AddButton({ Text = "Save Current Pos to Spot", Func = function()
 end})
 UI.Toggles["FastTP"] = FarmL:AddToggle("FastTP", { Text = "Fast TP (Off = Natural Walk)", Default = false, Callback = function(v) Flags.FastTP = v end })
 UI.Toggles["AutoBallPickup"] = FarmL:AddToggle("AutoBallPickup", { Text = "Auto Ball Retrieval", Default = false, Callback = function(v) Flags.AutoBallPickup = v end })
+UI.Toggles["BallMag"] = FarmL:AddToggle("BallMag", { Text = "Ball Magnet (Reach)", Default = false, Callback = ToggleBallMag })
+UI.Options["BallMagDistance"] = FarmL:AddSlider("BallMagDistance", { Text = "Magnet Radius", Min = 10, Max = 200, Default = 50, Suffix = " studs", Callback = function(v) Flags.BallMagDistance = v end })
 
 FarmL:AddDivider()
 UI.Toggles["TPAntiContest"] = FarmL:AddToggle("TPAntiContest", { Text = "TP-Up When Shooting", Default = false, Callback = ToggleTPAntiContest })
