@@ -804,7 +804,7 @@ FarmL:AddButton({ Text = "Save Current Pos to Spot", Func = function()
     if root then SavedSpots[Flags.FarmSpot].position = root.Position; Library:Notify({ Title = "Spot Saved", Description = Flags.FarmSpot .. ": " .. tostring(root.Position), Duration = 3 }) end
 end})
 UI.Toggles["FastTP"] = FarmL:AddToggle("FastTP", { Text = "Fast TP (Off = Natural Walk)", Default = false, Callback = function(v) Flags.FastTP = v end })
-UI.Toggles["AutoBallRetrieve"] = FarmL:AddToggle("AutoBallRetrieve", { Text = "Auto Ball Retrieval", Default = false, Callback = function(v) Flags.AutoBallPickup = v end })
+UI.Toggles["AutoBallPickup"] = FarmL:AddToggle("AutoBallPickup", { Text = "Auto Ball Retrieval", Default = false, Callback = function(v) Flags.AutoBallPickup = v end })
 
 FarmL:AddDivider()
 UI.Toggles["TPAntiContest"] = FarmL:AddToggle("TPAntiContest", { Text = "TP-Up When Shooting", Default = false, Callback = ToggleTPAntiContest })
@@ -1000,10 +1000,6 @@ local function LoadConfigByName(name)
 
     if config.Flags then
         for k, v in pairs(config.Flags) do
-            if k == "AutoMatch" or k == "AutoFarm" or k == "AutoGuard" or k == "AutoSteal" or k == "AutoTime" then
-                Flags[k] = v
-                continue
-            end
             if UI.Toggles[k] then UI.Toggles[k]:SetValue(v) end
             if UI.Options[k] then UI.Options[k]:SetValue(v) end
         end
