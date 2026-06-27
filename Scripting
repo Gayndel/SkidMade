@@ -248,8 +248,9 @@ local function getLooseBall()
     if not char then return nil end
     local root = getRoot(char)
     if not root then return nil end
-    local hoopPos = getHoopPosition()
-    if not hoopPos then return nil end
+    
+    -- We removed the hard 'return nil' here so it keeps searching even if you don't have a hoop yet.
+    local hoopPos = getHoopPosition() 
     
     local courtName = char:GetAttribute("InGame")
     local searchArea = workspace
@@ -273,10 +274,16 @@ local function getLooseBall()
             end
             
             if not held then
-                local ballToHoop = (obj.Position - hoopPos).Magnitude
-                if ballToHoop > 60 then continue end
+                -- Only check hoop distance if a hoop is actually assigned
+                if hoopPos then
+                    local ballToHoop = (obj.Position - hoopPos).Magnitude
+                    if ballToHoop > 100 then continue end
+                end
+                
+                -- Expanded the detection radius so it doesn't ignore balls on big courts
                 local d = (obj.Position - root.Position).Magnitude
-                if math.abs(obj.Position.Y - root.Position.Y) > 20 or d > 50 then continue end
+                if math.abs(obj.Position.Y - root.Position.Y) > 30 or d > 200 then continue end
+                
                 if d < dist then dist = d; nearest = obj end
             end
         end
@@ -594,7 +601,8 @@ local function ToggleAutoFarm(v)
                     local looseBall = getLooseBall()
                     if looseBall then
                         if Flags.FastTP then
-                            fastTP(looseBall.Position + Vector3.new(0, 3, 0), false)
+                            -- Teleport directly onto the ball instead of hovering 3 studs above it
+                            fastTP(looseBall.Position, false)
                         else
                             local hum = getHum(c)
                             if hum then hum:MoveTo(looseBall.Position) end
