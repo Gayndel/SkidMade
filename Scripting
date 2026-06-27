@@ -450,32 +450,34 @@ task.spawn(function()
     end
 end)
 
--- ═══ TP ANTI-CONTEST ═══
+-- ═══ TP ANTI-CONTEST (Network Replicated Bypass) ═══
 local function setupTPForChar(char)
     local root = char:WaitForChild("HumanoidRootPart", 5)
     if not root then return end
     local savedCF, isTPd = nil, false
     local holdUntil = 0
-    local tpStamp = 0
-
-    local function forcePosition(cf)
-        root.Anchored = true
-        root.CFrame = cf
-    end
 
     local function restore()
         if not isTPd then return end
         isTPd = false
-        root.Anchored = false
-        if savedCF then root.CFrame = savedCF end
+        if savedCF then 
+            root.CFrame = savedCF 
+            root.AssemblyLinearVelocity = Vector3.zero
+        end
         savedCF = nil
     end
 
+    -- We use Stepped to intercept physics calculation every single frame
     local holdConn
-    holdConn = RunService.Heartbeat:Connect(function()
+    holdConn = RunService.Stepped:Connect(function()
         if isTPd and savedCF then
             if tick() < holdUntil then
-                forcePosition(savedCF + Vector3.new(0, Flags.TPHeight, 0))
+                -- DO NOT ANCHOR. Anchoring stops server replication. 
+                -- We freeze the unanchored character every frame to override gravity and rubberbanding.
+                root.Anchored = false
+                root.AssemblyLinearVelocity = Vector3.zero
+                root.AssemblyAngularVelocity = Vector3.zero
+                root.CFrame = savedCF + Vector3.new(0, Flags.TPHeight, 0)
             else
                 restore()
             end
@@ -487,10 +489,13 @@ local function setupTPForChar(char)
         local a = char:GetAttribute("Action") or ""
         if (a == "Shooting" or a == "Dunking") and not isTPd then
             savedCF = root.CFrame
-            tpStamp = tick()
             holdUntil = math.huge
             isTPd = true
-            forcePosition(savedCF + Vector3.new(0, Flags.TPHeight, 0))
+            
+            root.Anchored = false
+            root.AssemblyLinearVelocity = Vector3.zero
+            root.AssemblyAngularVelocity = Vector3.zero
+            root.CFrame = savedCF + Vector3.new(0, Flags.TPHeight, 0)
         end
     end)
 
@@ -1108,6 +1113,7 @@ task.spawn(function()
     end)
     
     if autoName and autoName ~= "" then
+        autoName = autoName:gsub("[\n\r]", "")
         if LoadConfigByName(autoName) then
             Flags.ConfigName = autoName
             RefreshDropdown()
