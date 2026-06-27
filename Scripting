@@ -1,5 +1,5 @@
 -- ═══════════════════════════════════════════════════════════════
--- GYM BASKETBALL OP v8.9 - FPS Optimized Edition
+-- GYM BASKETBALL OP v8.10 - Queue Fixed Edition
 -- Auto Farm + Defense + Queue | Config System
 -- ═══════════════════════════════════════════════════════════════
 
@@ -254,7 +254,6 @@ local function getLooseBall()
     local courtName = char:GetAttribute("InGame")
     local searchArea = workspace
     
-    -- FPS FIX: Only searches for the ball inside your specific court to prevent lag
     if courtName and courtName ~= "" then
         local courts = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Courts")
         if courts and courts:FindFirstChild(courtName) then
@@ -305,6 +304,25 @@ local function fastTP(targetPos, lookAtGoal)
     return true
 end
 
+local function get1v1Spot()
+    local s = workspace:FindFirstChild("Spots") and workspace.Spots:FindFirstChild("1v1")
+    if s then return s end
+    
+    local map = workspace:FindFirstChild("Map")
+    if map then
+        local mapSpots = map:FindFirstChild("Spots")
+        if mapSpots and mapSpots:FindFirstChild("1v1") then return mapSpots["1v1"] end
+    end
+
+    -- Dynamically search for the button based on prompt text
+    for _, obj in pairs(workspace:GetDescendants()) do
+        if obj:IsA("ProximityPrompt") then
+            local txt = string.lower(obj.ActionText .. " " .. obj.ObjectText)
+            if txt:find("1v1") then return obj.Parent end
+        end
+    end
+    return nil
+end
 
 -- ═══ SHOT LOGIC & UI DETECTION OVERRIDE ═══
 local function getRealTiming(c, rawTiming)
@@ -512,7 +530,7 @@ local function ToggleAutoFarm(v)
     if v then
         task.spawn(function()
             while Flags.AutoFarm do
-                task.wait(0.15) -- FPS FIX: Throttle the core loop so it doesn't max CPU usage
+                task.wait(0.15)
                 
                 local c = Player.Character
                 local root = getRoot(c)
@@ -610,26 +628,36 @@ local function ToggleAutoMatch(v)
                 end
                 if inQueueWait then continue end
 
-                local spot = workspace:FindFirstChild("Spots") and workspace.Spots:FindFirstChild("1v1")
+                local spot = get1v1Spot()
                 if spot and (tick() - lastQueueAttempt > 5) then
+                    
                     if Flags.FastTP then
-                        root.CFrame = spot.CFrame + Vector3.new(0, 3, 0)
+                        root.CFrame = spot.CFrame + Vector3.new(0, 1, 0)
+                        root.AssemblyLinearVelocity = Vector3.zero
                     else
                         local hum = getHum(c)
                         if hum then hum:MoveTo(spot.Position) end
                     end
 
                     task.wait(0.5)
-                    if (root.Position - spot.Position).Magnitude < 10 then
-                        pcall(function()
-                            local q = ReplicatedStorage:FindFirstChild("Queue")
-                            if q then
-                                q:FireServer({ JoinQueue = true })
-                                lastQueueAttempt = tick()
-                                inQueueWait = true
+                    
+                    -- Physically trigger any ProximityPrompts for queueing
+                    for _, prompt in pairs(workspace:GetDescendants()) do
+                        if prompt:IsA("ProximityPrompt") and prompt.Parent then
+                            if (prompt.Parent.Position - root.Position).Magnitude < 15 then
+                                pcall(function() fireproximityprompt(prompt) end)
                             end
-                        end)
+                        end
                     end
+
+                    -- Fire remote just in case physical prompt isn't solely relied upon
+                    pcall(function()
+                        local q = ReplicatedStorage:FindFirstChild("Queue")
+                        if q then q:FireServer({ JoinQueue = true }) end
+                    end)
+                    
+                    lastQueueAttempt = tick()
+                    inQueueWait = true
                 end
             end
         end)
@@ -1031,4 +1059,4 @@ task.spawn(function()
     end
 end)
 
-Library:Notify({ Title = "Gym Basketball OP v8.9", Description = "LCtrl to toggle UI.", Duration = 5 })
+Library:Notify({ Title = "Gym Basketball OP v8.10", Description = "LCtrl to toggle UI.", Duration = 5 })
