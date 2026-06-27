@@ -243,7 +243,6 @@ local function getNearestBallHandler()
     return nearest
 end
 
--- Replaced with logic from solo.txt as requested
 local function getLooseBall()
     local char = Player.Character
     if not char then return nil end
@@ -770,12 +769,28 @@ local function ToggleAutoStart(v) Flags.AutoStart = v end
 -- ═══════════════════════════════════════════════════════════════
 -- WINDOW UI
 -- ═══════════════════════════════════════════════════════════════
+local preHide = Flags.AutoHide
+pcall(function()
+    if isfile and isfile("GymBballConfigs/Autoload.txt") then
+        local autoName = readfile("GymBballConfigs/Autoload.txt")
+        if autoName and autoName ~= "" then
+            local cfgPath = "GymBballConfigs/" .. autoName .. ".json"
+            if isfile(cfgPath) then
+                local data = HttpService:JSONDecode(readfile(cfgPath))
+                if data and data.Flags and type(data.Flags.AutoHide) == "boolean" then
+                    preHide = data.Flags.AutoHide
+                end
+            end
+        end
+    end
+end)
+
 local Window = Library:CreateWindow({
     Title         = "BadgePlug v2 (Fixed Layout)",
     Footer        = "Made By Solo",
     Size          = UDim2.fromOffset(620, 500),
     Center        = true,
-    AutoShow      = not Flags.AutoHide,
+    AutoShow      = not preHide,
     ToggleKeybind = Enum.KeyCode.LeftControl,
 })
 
