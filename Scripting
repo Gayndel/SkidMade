@@ -1,5 +1,5 @@
 -- ═══════════════════════════════════════════════════════════════
--- GYM BASKETBALL OP v8.0 - Obsidian UI
+-- GYM BASKETBALL OP v8.0 - Obsidian UI (PATCHED)
 -- Dashboard + Auto-Farm + Badges + Attributes + 1v1 + Config
 -- ═══════════════════════════════════════════════════════════════
 
@@ -21,15 +21,33 @@ local Lighting         = game:GetService("Lighting")
 
 local Player = Players.LocalPlayer
 
--- ═══ ANTI-KICK (hookmetamethod based) ═══
+-- ═══ ENHANCED ANTI-KICK & ANTI-CLIENT-DEATH ═══
 pcall(function()
     local oldNamecall
     oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
         local method = getnamecallmethod()
-        if method == "Kick" and self == Player then
-            return nil
+        if not checkcaller() then
+            -- Block direct kicks
+            if method == "Kick" and self == Player then
+                return nil
+            end
+            -- Block local scripts from doing damage or breaking character joints
+            if (method == "TakeDamage" or method == "BreakJoints") and (self:IsA("Humanoid") or self:IsA("Model")) then
+                return nil
+            end
         end
         return oldNamecall(self, ...)
+    end))
+
+    local oldNewIndex
+    oldNewIndex = hookmetamethod(game, "__newindex", newcclosure(function(t, k, v)
+        if not checkcaller() then
+            -- Block local scripts from forcefully setting health to 0
+            if t:IsA("Humanoid") and k == "Health" and type(v) == "number" and v <= 0 then
+                return nil
+            end
+        end
+        return oldNewIndex(t, k, v)
     end))
 end)
 
@@ -198,7 +216,6 @@ if IS_MAIN_MENU then
         end)
     end })
 
-    -- Queue on teleport
     local function TriggerQueue()
         if Flags.AutoExecuteOnTP and Flags.AutoExecuteString ~= "" then
             local qot = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport) or (getgenv and getgenv().queue_on_teleport)
@@ -208,7 +225,6 @@ if IS_MAIN_MENU then
     TriggerQueue()
     Player.OnTeleport:Connect(TriggerQueue)
 
-    -- Anti-AFK
     local VirtualUser = game:GetService("VirtualUser")
     Player.Idled:Connect(function() VirtualUser:CaptureController(); VirtualUser:ClickButton2(Vector2.new(0,0)) end)
 
@@ -381,6 +397,11 @@ end
 local function fastTP(targetPos, lookAtGoal)
     local c = Player.Character; if not c then return false end
     local root = getRoot(c); if not root then return false end
+    
+    -- Stop momentum to prevent physics flinging out of the map bounds
+    root.AssemblyLinearVelocity = Vector3.zero
+    root.AssemblyAngularVelocity = Vector3.zero
+
     if lookAtGoal then
         local goal = getHoopPosition()
         if goal then root.CFrame = CFrame.new(targetPos, Vector3.new(goal.X, targetPos.Y, goal.Z)); return true end
@@ -503,8 +524,8 @@ local function leaveQueue() pcall(function() QueueRemote:FireServer({LeaveQueue 
 local function joinQueue1v1()
     local c = Player.Character; if not c then return end
     local root = getRoot(c); if not root then return end
-    root.CFrame = CFrame.new(SPOT_1V1 + Vector3.new(0, 3, 0))
     root.AssemblyLinearVelocity = Vector3.zero
+    root.CFrame = CFrame.new(SPOT_1V1 + Vector3.new(0, 3, 0))
     task.wait(0.3)
     pcall(function() QueueRemote:FireServer({JoinQueue = true}) end)
 end
@@ -541,7 +562,6 @@ end
 -- BACKGROUND LOOPS
 -- ═══════════════════════════════════════════════════════════════
 
--- Auto Farm Loop
 task.spawn(function()
     local lastGuardFire, lastReachFire = 0, 0
     while true do
@@ -575,8 +595,8 @@ task.spawn(function()
                         if hoopPos then
                             local guardPos = tr.Position + (hoopPos - tr.Position).Unit * Flags.GuardDistance
                             local goalCF = CFrame.new(guardPos, Vector3.new(tr.Position.X, guardPos.Y, tr.Position.Z))
-                            root.CFrame = Flags.GuardSpeed >= 1 and goalCF or root.CFrame:Lerp(goalCF, Flags.GuardSpeed)
                             root.AssemblyLinearVelocity = Vector3.zero
+                            root.CFrame = Flags.GuardSpeed >= 1 and goalCF or root.CFrame:Lerp(goalCF, Flags.GuardSpeed)
                         end
                     end
                     if tick() - lastGuardFire > 0.5 then
@@ -589,19 +609,32 @@ task.spawn(function()
     end
 end)
 
--- Auto Match Queue Loop
 task.spawn(function()
+    local wasInGame = false
     while true do
-        task.wait(5)
-        if not Flags.AutoMatch then continue end
+        task.wait(2)
+        if not Flags.AutoMatch then 
+            wasInGame = false
+            continue 
+        end
         local c = Player.Character; if not c then continue end
+        
         local inGame = c:GetAttribute("InGame")
         local inQueue = c:GetAttribute("InQueue")
-        if (not inGame or inGame == "") and not inQueue then joinQueue1v1() end
+        local currentlyInGame = (inGame and inGame ~= "")
+
+        if currentlyInGame then
+            wasInGame = true
+        elseif wasInGame and not currentlyInGame then
+            wasInGame = false
+            task.wait(8)
+        elseif not currentlyInGame and not inQueue and not wasInGame then
+            joinQueue1v1()
+            task.wait(3)
+        end
     end
 end)
 
--- 1v1 Only Enforcement
 task.spawn(function()
     while true do
         task.wait(2)
@@ -617,15 +650,20 @@ task.spawn(function()
                 leaveQueue()
                 local timeout = tick() + 15
                 repeat task.wait(0.5) until not c.Parent or not c:GetAttribute("InGame") or c:GetAttribute("InGame") == "" or tick() > timeout
-                task.wait(1)
+                task.wait(5)
                 c = Player.Character
-                if c then local root = getRoot(c); if root then root.CFrame = CFrame.new(SPOT_1V1 + Vector3.new(0, 3, 0)) end end
+                if c then 
+                    local root = getRoot(c); 
+                    if root then 
+                        root.AssemblyLinearVelocity = Vector3.zero
+                        root.CFrame = CFrame.new(SPOT_1V1 + Vector3.new(0, 3, 0)) 
+                    end 
+                end
             end
         end
     end
 end)
 
--- Auto Steal
 task.spawn(function()
     while true do
         task.wait(0.6)
@@ -637,7 +675,6 @@ task.spawn(function()
     end
 end)
 
--- Auto Dunk
 task.spawn(function()
     while true do
         task.wait(0.2)
@@ -658,7 +695,6 @@ task.spawn(function()
     end
 end)
 
--- NoMeter
 task.spawn(function()
     while true do
         task.wait(5)
@@ -666,7 +702,6 @@ task.spawn(function()
     end
 end)
 
--- Anti-Stun
 task.spawn(function()
     while true do
         task.wait(0.1)
@@ -678,7 +713,6 @@ task.spawn(function()
     end
 end)
 
--- Auto Badge Upgrade (no spam — single notify at end)
 task.spawn(function()
     while true do
         task.wait(0.7)
@@ -707,7 +741,6 @@ task.spawn(function()
     end
 end)
 
--- Auto Attribute Upgrade
 task.spawn(function()
     while true do
         task.wait(0.7)
@@ -742,7 +775,6 @@ task.spawn(function()
     end
 end)
 
--- Auto Save
 task.spawn(function() while true do task.wait(5); if Flags.AutoSaveConfig then saveConfig(true) end end end)
 
 -- ═══ CONNECTIONS ═══
@@ -770,8 +802,8 @@ RunService.Stepped:Connect(function()
             if hoopPos then
                 local guardPos = tr.Position + (hoopPos - tr.Position).Unit * Flags.GuardDistance
                 local goalCF = CFrame.new(guardPos, Vector3.new(tr.Position.X, guardPos.Y, tr.Position.Z))
-                root.CFrame = Flags.GuardSpeed >= 1 and goalCF or root.CFrame:Lerp(goalCF, Flags.GuardSpeed)
                 root.AssemblyLinearVelocity = Vector3.zero
+                root.CFrame = Flags.GuardSpeed >= 1 and goalCF or root.CFrame:Lerp(goalCF, Flags.GuardSpeed)
             end
         end
     else
@@ -779,10 +811,19 @@ RunService.Stepped:Connect(function()
     end
 end)
 
+-- Safe Noclip Update
 RunService.Stepped:Connect(function()
     local c = Player.Character; if not c then return end
     if Flags.SpeedEnabled then local hum = getHum(c); if hum and hum.MoveDirection.Magnitude > 0 then hum.WalkSpeed = 16 * Flags.SpeedMult end end
-    if Flags.Noclip then for _, part in pairs(c:GetDescendants()) do if part:IsA("BasePart") then part.CanCollide = false end end end
+    
+    if Flags.Noclip then 
+        for _, part in pairs(c:GetDescendants()) do 
+            -- Exclude lower body parts so the character doesn't fall through the floor!
+            if part:IsA("BasePart") and part.Name ~= "HumanoidRootPart" and not part.Name:match("Leg") and not part.Name:match("Foot") then 
+                part.CanCollide = false 
+            end 
+        end 
+    end
 end)
 
 RunService.Heartbeat:Connect(function()
@@ -790,7 +831,6 @@ RunService.Heartbeat:Connect(function()
     if Flags.InfiniteStamina then c:SetAttribute("Stamina", 100) end
 end)
 
--- TP Anti-Contest setup
 local function setupTPForChar(char)
     local root = char:WaitForChild("HumanoidRootPart", 5); if not root then return end
     local savedCF, isTPd = nil, false
@@ -810,7 +850,6 @@ local function setupTPForChar(char)
     local hum = getHum(char); if hum then hum.Died:Once(function() pcall(restore) end) end
 end
 
--- Disable rendering
 local function toggleRendering(disable)
     if disable then
         RunService:Set3dRenderingEnabled(false)
@@ -823,7 +862,7 @@ end
 -- WINDOW
 -- ═══════════════════════════════════════════════════════════════
 local Window = Library:CreateWindow({
-    Title         = "Gym Basketball OP v8",
+    Title         = "Gym Basketball OP v8 (Patched)",
     Footer        = "Obsidian | Dashboard + Farm + Badges + 1v1 | RCtrl",
     Size          = UDim2.fromOffset(630, 510),
     Center        = true, AutoShow = true,
@@ -878,7 +917,7 @@ task.spawn(function()
 end)
 
 -- ═══════════════════════════════════════════════════════════════
--- TAB 2: AUTO FARM (merged with anti-contest)
+-- TAB 2: AUTO FARM 
 -- ═══════════════════════════════════════════════════════════════
 local FarmTab = Window:AddTab({ Name = "Auto Farm", Icon = "sprout" })
 local FarmL   = FarmTab:AddLeftGroupbox("Auto Farm")
@@ -958,7 +997,7 @@ GameR:AddToggle("InfiniteStamina", { Text = "Infinite Stamina", Default = Flags.
 GameR:AddToggle("Noclip", { Text = "Noclip", Default = Flags.Noclip, Callback = function(v) Flags.Noclip = v end })
 
 -- ═══════════════════════════════════════════════════════════════
--- TAB 5: BADGES (organized by category)
+-- TAB 5: BADGES 
 -- ═══════════════════════════════════════════════════════════════
 local BadgeTab = Window:AddTab({ Name = "Badges", Icon = "award" })
 local BadgeL   = BadgeTab:AddLeftGroupbox("Upgrade Badges")
@@ -1130,7 +1169,6 @@ local VirtualUser = game:GetService("VirtualUser")
 Player.Idled:Connect(function() if Flags.AntiAFK then VirtualUser:CaptureController(); VirtualUser:ClickButton2(Vector2.new(0,0)) end end)
 Player.CharacterAdded:Connect(function(char) task.wait(1.5); if Flags.TPAntiContest then setupTPForChar(char) end end)
 
--- Queue on teleport
 local function TriggerQueue()
     if Flags.AutoExecuteOnTP and Flags.AutoExecuteString ~= "" then
         local qot = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport) or (getgenv and getgenv().queue_on_teleport)
