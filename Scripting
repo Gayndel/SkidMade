@@ -1,5 +1,5 @@
 -- ═══════════════════════════════════════════════════════════════
--- GYM BASKETBALL OP v8.4 - Cleaned Edition
+-- GYM BASKETBALL OP v8.12 - Config System Overhaul
 -- Auto Farm + Defense + Queue | Config System
 -- ═══════════════════════════════════════════════════════════════
 
@@ -8,10 +8,10 @@ if not game:IsLoaded() then game.Loaded:Wait() end
 -- ═══ GETGENV SETUP ═══
 getgenv().GymBball = getgenv().GymBball or {
     Flags = {
-        AutoTime = false, SmartAI = false, StartHoldTime = 0.50,
+        AutoTime = false, SmartAI = false, StartHoldTime = 0.45,
         ShotFeedbackHUD = false, FeedbackDuration = 3,
-        AutoFarm = false, FarmSpot = "Auto 3-Pointer",
-        FarmHoldTime = 0.45, FastTP = false, TPAntiContest = false, TPHeight = 10,
+        AutoFarm = false, FarmSpot = "Auto 3-Pointer", FarmAutoGreen = false,
+        FastTP = false, TPAntiContest = false, TPHeight = 10,
         TPHoldTime = 0.5, AutoGuard = false, AutoSteal = false, GuardDistance = 1.5,
         GuardSpeed = 1, SpeedEnabled = false, SpeedMult = 1, Noclip = false,
         InfiniteStamina = false, AutoStart = false, AutoBallPickup = false,
@@ -20,12 +20,12 @@ getgenv().GymBball = getgenv().GymBball or {
         ConfigName = "", NewConfigName = "", ScoreTracker = 0
     },
     HoldTimes = {
-        Standing = 0.50, OffDribble = 0.50, Moving = 0.50, Layup = 0.50,
-        PostHook = 0.50, PostFade = 0.50, Dunk = 0.50, Floater = 0.50, default = 0.50
+        Standing = 0.45, OffDribble = 0.45, Moving = 0.45, Layup = 0.45,
+        PostHook = 0.45, PostFade = 0.45, Dunk = 0.45, Floater = 0.45, default = 0.45
     },
     SavedSpots = {
-        ["3-Pointer"] = { position = Vector3.new(-101.24, 70.36, 84.10), holdTime = 0.45, scoreType = 3, distance = 52.16 },
-        ["Mid-Range"] = { position = Vector3.new(-100.68, 70.37, 108.20), holdTime = 0.45, scoreType = 2, distance = 28.74 },
+        ["3-Pointer"] = { position = Vector3.new(-101.24, 70.36, 84.10), scoreType = 3, distance = 50 },
+        ["Mid-Range"] = { position = Vector3.new(-100.68, 70.37, 108.20), scoreType = 2, distance = 30 },
     },
     Conns = {},
     ShotState = { InProgress = false, Paused = false, ReboundDebounce = false, LastType = "default" }
@@ -38,39 +38,36 @@ local SavedSpots = Env.SavedSpots
 local Conns = Env.Conns
 local ShotState = Env.ShotState
 
--- Clean up older UI instances on re-execute to prevent overlap stacking
-if getgenv().GymBballUI_Lib then
-    pcall(function() getgenv().GymBballUI_Lib:Unload() end)
-end
-
--- Reset loop flags on re-execution so stale loops from previous run die
+-- Reset loop flags on re-execution
 Flags.AutoFarm = false
 Flags.AutoMatch = false
 Flags.AutoGuard = false
 Flags.AutoSteal = false
 Flags.AutoTime = false
-Flags.AutoBallPickup = false
-Flags.StartHoldTime = Flags.StartHoldTime or 0.50
+Flags.StartHoldTime = Flags.StartHoldTime or 0.45
 
--- Reset HoldTimes to StartHoldTime if no config loaded yet
 if not Env._configLoaded then
-    local base = Flags.StartHoldTime or 0.50
+    local base = Flags.StartHoldTime or 0.45
     for k in pairs(HoldTimes) do HoldTimes[k] = base end
 end
 
--- Disconnect old connections from previous execution
 for k, conn in pairs(Conns) do
     pcall(function() conn:Disconnect() end)
     Conns[k] = nil
 end
 
+-- ═══ DYNAMIC GAME STATE ═══
 local LOBBY_PLACE_ID = 18517963950
 local MATCH_PLACE_ID = 18517967096
-local IS_LOBBY = (game.PlaceId == LOBBY_PLACE_ID)
-local IS_MATCH = (game.PlaceId == MATCH_PLACE_ID)
+
+local function GetGameState()
+    return {
+        IsLobby = (game.PlaceId == LOBBY_PLACE_ID),
+        IsMatch = (game.PlaceId == MATCH_PLACE_ID)
+    }
+end
 
 local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/deividcomsono/Obsidian/refs/heads/main/Library.lua"))()
-getgenv().GymBballUI_Lib = Library
 local UI = { Toggles = {}, Options = {} }
 
 local Players           = game:GetService("Players")
@@ -113,19 +110,55 @@ pcall(function()
     end))
 end)
 
--- ═══ IN-GAME STAMPS (for auto queue settle) ═══
 local inGameStamp  = 0
 local outGameStamp = tick()
+
+-- ═══ CENTRALIZED STATE MANAGER ═══
+local oobCleaned = {}
+local hiddenOOB = {}
+
 task.spawn(function()
-    local prev = nil
+    local prevInGame = nil
     while true do
-        task.wait(0.25)
+        task.wait(0.1)
         local c = Player.Character
+        
+        -- Timestamp Tracking
         local ig = c and c:GetAttribute("InGame") or ""
         local nowIn = (ig ~= "" and ig ~= false)
-        if nowIn and prev ~= true then inGameStamp = tick() end
-        if not nowIn and prev ~= false then outGameStamp = tick() end
-        prev = nowIn
+        if nowIn and prevInGame ~= true then inGameStamp = tick() end
+        if not nowIn and prevInGame ~= false then outGameStamp = tick() end
+        prevInGame = nowIn
+
+        if not c then continue end
+
+        -- Anti-Stun
+        if Flags.AntiStun then
+            for _, attr in pairs({"Stunned","PushStun","SecondPushStun","RecentlyPushed","Pushed"}) do
+                if c:GetAttribute(attr) then c:SetAttribute(attr, false) end
+            end
+        end
+
+        -- Anti-OOB
+        if Flags.AntiOOB then
+            local courtName = c:GetAttribute("InGame")
+            if courtName and courtName ~= "" and not oobCleaned[courtName] then
+                pcall(function()
+                    local courts = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Courts")
+                    local court = courts and courts:FindFirstChild(courtName)
+                    local oobFolder = court and court:FindFirstChild("OutOfBounds")
+                    if oobFolder then
+                        for _, part in pairs(oobFolder:GetDescendants()) do
+                            if part:IsA("BasePart") then
+                                table.insert(hiddenOOB, {part = part, parent = part.Parent})
+                                part.Parent = nil
+                            end
+                        end
+                    end
+                end)
+                oobCleaned[courtName] = true
+            end
+        end
     end
 end)
 
@@ -139,34 +172,21 @@ local function isActuallyPlaying(char)
     return inGame == true or (type(inGame) == "string" and inGame ~= "")
 end
 
-local function unstickChar()
-    local c = Player.Character
-    if not c then return end
-    local action = c:GetAttribute("Action")
-    if action == "Shooting" or action == "Dunking" then
-        pcall(function() ActionRemote:FireServer({Type="Shoot", Shoot=false}) end)
-        c:SetAttribute("Action", "")
-        c:SetAttribute("Released", true)
-    end
-    c:SetAttribute("Stunned", false)
-    c:SetAttribute("PushStun", false)
-    local root = getRoot(c)
-    if root then root.Anchored = false end
-    ShotState.InProgress = false
-end
-
 local function getShotType()
     local c = Player.Character
     if not c then return "default" end
     local st = c:GetAttribute("Action") or ""
     local gather = c:GetAttribute("GatherType") or ""
+    
     if st == "Dunking" then return "Dunk" end
     if gather:find("Layup") then return "Layup" end
     if gather:find("Floater") then return "Floater" end
     if gather:find("PostHook") then return "PostHook" end
     if gather:find("PostFade") then return "PostFade" end
+    
     local hum = getHum(c)
     if hum and hum.MoveDirection.Magnitude > 0.1 then return "Moving" end
+    
     return "Standing"
 end
 
@@ -223,57 +243,28 @@ local function getNearestBallHandler()
     return nearest
 end
 
-local function getCourtBallsFolder()
-    local char = Player.Character
-    if not char then return nil end
-    local courtName = char:GetAttribute("InGame")
-    if not courtName or courtName == "" then return nil end
-    local court = workspace.Map.Courts:FindFirstChild(courtName)
-    return court
-end
-
--- NEW ISOLATED BALL RETRIEVAL SEARCH LOGIC
+-- Replaced with logic from solo.txt as requested
 local function getLooseBall()
     local char = Player.Character
     if not char then return nil end
     local root = getRoot(char)
     if not root then return nil end
-    
-    local hoopPos = getHoopPosition() 
-    local courtName = char:GetAttribute("InGame")
-    local searchArea = workspace
-    
-    if courtName and courtName ~= "" then
-        local courts = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Courts")
-        if courts and courts:FindFirstChild(courtName) then
-            searchArea = courts[courtName]
-        end
-    end
-
+    local hoopPos = getHoopPosition()
+    if not hoopPos then return nil end
     local nearest, dist = nil, math.huge
-    for _, obj in pairs(searchArea:GetDescendants()) do
-        if (obj.Name == "Ball" or obj.Name == "Basketball") and obj:IsA("BasePart") and not obj.Anchored then
+    for _, obj in pairs(workspace:GetDescendants()) do
+        if obj.Name == "Ball" and obj:IsA("BasePart") and not obj.Anchored then
             local parentName = obj.Parent and obj.Parent.Name or ""
             if parentName == "AnimRig" or parentName == "AnimationRig" then continue end
-            if obj.Parent and obj.Parent:FindFirstChildOfClass("Humanoid") then continue end 
-            
             local held = false
             for _, p in pairs(Players:GetPlayers()) do
-                if p.Character and (p.Character:FindFirstChild("Ball") == obj or p.Character:FindFirstChild("Basketball") == obj) then 
-                    held = true
-                    break 
-                end
+                if p.Character and p.Character:FindFirstChild("Ball") == obj then held = true; break end
             end
-            
             if not held then
-                if hoopPos then
-                    local ballToHoop = (obj.Position - hoopPos).Magnitude
-                    if ballToHoop > 120 then continue end 
-                end
-                
+                local ballToHoop = (obj.Position - hoopPos).Magnitude
+                if ballToHoop > 60 then continue end
                 local d = (obj.Position - root.Position).Magnitude
-                if math.abs(obj.Position.Y - root.Position.Y) > 50 or d > 300 then continue end
-                
+                if math.abs(obj.Position.Y - root.Position.Y) > 20 or d > 50 then continue end
                 if d < dist then dist = d; nearest = obj end
             end
         end
@@ -301,22 +292,74 @@ local function fastTP(targetPos, lookAtGoal)
     return true
 end
 
+local function get1v1Spot()
+    local s = workspace:FindFirstChild("Spots") and workspace.Spots:FindFirstChild("1v1")
+    if s then return s end
+    
+    local map = workspace:FindFirstChild("Map")
+    if map then
+        local mapSpots = map:FindFirstChild("Spots")
+        if mapSpots and mapSpots:FindFirstChild("1v1") then return mapSpots["1v1"] end
+    end
 
--- ═══ SHOT LOGIC ═══
+    for _, obj in pairs(workspace:GetDescendants()) do
+        if obj:IsA("ProximityPrompt") then
+            local txt = string.lower(obj.ActionText .. " " .. obj.ObjectText)
+            if txt:find("1v1") then return obj.Parent end
+        end
+    end
+    return nil
+end
+
+-- ═══ SHOT LOGIC & UI DETECTION OVERRIDE ═══
+local function getRealTiming(c, rawTiming)
+    if not c then return string.upper(rawTiming or "UNKNOWN") end
+    local t = string.lower(rawTiming or "")
+    
+    if t == "perfect" or t == "green" or t == "excellent" then return "PERFECT" end
+    
+    local isPerfect = false
+    
+    local perc = tonumber(c:GetAttribute("ShotPercentage")) or tonumber(c:GetAttribute("Percentage"))
+    if perc and perc >= 100 then isPerfect = true end
+    if c:GetAttribute("Green") == true then isPerfect = true end
+    
+    if not isPerfect then
+        pcall(function()
+            local pgui = Player:FindFirstChild("PlayerGui")
+            if pgui then
+                for _, ui in pairs(pgui:GetDescendants()) do
+                    if ui:IsA("TextLabel") and ui.Visible and ui.TextTransparency < 1 then
+                        local txt = string.upper(ui.Text)
+                        if txt == "PERFECT" or string.match(txt, "SHOT PERCENTAGE:%s*100%%") then
+                            isPerfect = true
+                            break
+                        end
+                    end
+                end
+            end
+        end)
+    end
+    
+    if isPerfect then return "PERFECT" end
+    return string.upper(rawTiming)
+end
+
 local function adjustTiming(timing, shotType)
     local t = string.lower(timing or "")
     if t == "" or t == "default" or t == "perfect" or t == "good" then return 0 end
-    local old = HoldTimes[shotType] or 0.50
-    local scale = math.max(old * 0.04, 0.005)
+    
+    local old = HoldTimes[shotType] or 0.45
     local delta = 0
-    if t == "very early" then delta = scale * 3
-    elseif t == "early" then delta = scale * 2
-    elseif t == "slightly early" then delta = scale * 0.5
-    elseif t == "slightly late" then delta = scale * -0.5
-    elseif t == "late" then delta = scale * -2
-    elseif t == "very late" then delta = scale * -3
+    
+    if t == "very early" then delta = 0.08
+    elseif t == "early" then delta = 0.05
+    elseif t == "slightly early" then delta = 0.01
+    elseif t == "slightly late" then delta = -0.01
+    elseif t == "late" then delta = -0.05
+    elseif t == "very late" then delta = -0.08
     end
-    delta = math.clamp(delta, -0.03, 0.03)
+
     if delta ~= 0 then
         HoldTimes[shotType] = math.clamp(old + delta, 0.15, 2.0)
     end
@@ -324,32 +367,31 @@ local function adjustTiming(timing, shotType)
 end
 
 local function handleShotResult(c, holdTime, shotType)
-    local timing = c:GetAttribute("Timing")
-    if not timing then return end
-    local t = string.lower(timing)
-    if t == "default" then return end
+    local rawTiming = c:GetAttribute("Timing")
+    if not rawTiming then return end
+    if string.lower(rawTiming) == "default" then return end
+
+    local realTiming = getRealTiming(c, rawTiming)
 
     local delta = 0
-    local isPerfect = (t == "perfect" or t == "green")
-    local isGood = (t == "good")
+    local isPerfect = (realTiming == "PERFECT")
+    
     if isPerfect then
         HoldTimes[shotType] = holdTime
         Flags.ScoreTracker = Flags.ScoreTracker + 1
     elseif Flags.SmartAI then
-        delta = adjustTiming(timing, shotType)
+        delta = adjustTiming(rawTiming, shotType)
     end
 
     if Flags.ShotFeedbackHUD then
-        local title = isPerfect and "PERFECT (GREEN)" or string.upper(timing)
+        local title = realTiming .. " | " .. string.upper(shotType)
         local desc = "Hold: " .. string.format("%.3fs", holdTime)
+        
         if Flags.SmartAI and delta ~= 0 then
             local sign = delta > 0 and "+" or ""
-            desc = desc .. " | Adj " .. sign .. string.format("%.3f", delta) .. "s → " .. string.format("%.3f", HoldTimes[shotType]) .. "s"
-        elseif isPerfect then
-            desc = desc .. " | Locked in"
-        elseif isGood then
-            desc = desc .. " | No adjustment needed"
+            desc = desc .. " | Adj: " .. sign .. string.format("%.3f", delta) .. "s → " .. string.format("%.3f", HoldTimes[shotType]) .. "s"
         end
+        
         Library:Notify({ Title = title, Description = desc, Duration = Flags.FeedbackDuration or 3 })
     end
 end
@@ -362,8 +404,9 @@ local function executeShot(holdTimeOverride)
 
     ShotState.InProgress = true
     ShotState.ReboundDebounce = true
+    
     ShotState.LastType = getShotType()
-    local holdTime = holdTimeOverride or HoldTimes[ShotState.LastType] or 0.50
+    local holdTime = holdTimeOverride or HoldTimes[ShotState.LastType] or 0.45
 
     pcall(function() ActionRemote:FireServer({ Type = "Shoot", Shoot = true, HoldingQ = UserInputService:IsKeyDown(Enum.KeyCode.Q), HoldingL1 = false }) end)
 
@@ -375,6 +418,8 @@ local function executeShot(holdTimeOverride)
     task.spawn(function()
         local timeout = tick() + 4
         repeat task.wait(0.05) until c:GetAttribute("Released") == true or tick() > timeout or not c.Parent
+        
+        task.wait(0.1) 
         handleShotResult(c, holdTime, ShotState.LastType)
         task.wait(1.5)
         ShotState.ReboundDebounce = false
@@ -382,20 +427,25 @@ local function executeShot(holdTimeOverride)
     end)
 end
 
--- ═══ SHOT FEEDBACK LISTENER (works without Auto Green) ═══
+-- ═══ SHOT FEEDBACK LISTENER (Manual Shots) ═══
 task.spawn(function()
     while true do
         task.wait(0.1)
         local c = Player.Character
         if not c then continue end
         if ShotState.InProgress then continue end
+        
         local released = c:GetAttribute("Released")
-        local timing = c:GetAttribute("Timing")
-        if released and timing and string.lower(timing) ~= "default" and Flags.ShotFeedbackHUD then
-            local t = string.lower(timing)
-            local isPerfect = (t == "perfect" or t == "green")
-            local title = isPerfect and "PERFECT (GREEN)" or string.upper(timing)
+        local rawTiming = c:GetAttribute("Timing")
+        
+        if released and rawTiming and string.lower(rawTiming) ~= "default" and Flags.ShotFeedbackHUD then
+            task.wait(0.1) 
+            local realTiming = getRealTiming(c, rawTiming)
+            local shotType = getShotType()
+            
+            local title = realTiming .. " | " .. string.upper(shotType)
             Library:Notify({ Title = title, Description = "Manual shot", Duration = Flags.FeedbackDuration or 3 })
+            
             repeat task.wait(0.2) until not c:GetAttribute("Released") or not c.Parent
         end
     end
@@ -459,49 +509,6 @@ local function setupTPForChar(char)
     end) end
 end
 
--- ═══ ANTI-STUN LOOP ═══
-task.spawn(function()
-    while true do
-        task.wait(0.1)
-        if not Flags.AntiStun then continue end
-        local c = Player.Character
-        if not c then continue end
-        for _, attr in pairs({"Stunned","PushStun","SecondPushStun","RecentlyPushed","Pushed"}) do
-            if c:GetAttribute(attr) then c:SetAttribute(attr, false) end
-        end
-    end
-end)
-
--- ═══ ANTI OUT-OF-BOUNDS ═══
-local oobCleaned = {}
-task.spawn(function()
-    while true do
-        task.wait(0.5)
-        if not Flags.AntiOOB then continue end
-        local c = Player.Character
-        if not c then continue end
-        local courtName = c:GetAttribute("InGame")
-        if not courtName or courtName == "" then continue end
-        if not oobCleaned[courtName] then
-            pcall(function()
-                local courts = workspace:FindFirstChild("Map") and workspace.Map:FindFirstChild("Courts")
-                if not courts then return end
-                local court = courts:FindFirstChild(courtName)
-                if not court then return end
-                local oobFolder = court:FindFirstChild("OutOfBounds")
-                if oobFolder then
-                    for _, part in pairs(oobFolder:GetDescendants()) do
-                        if part:IsA("BasePart") then
-                            part:Destroy()
-                        end
-                    end
-                end
-            end)
-            oobCleaned[courtName] = true
-        end
-    end
-end)
-
 -- ═══════════════════════════════════════════════════════════════
 -- DYNAMIC TOGGLES & LOOPS
 -- ═══════════════════════════════════════════════════════════════
@@ -509,16 +516,15 @@ local function ToggleAutoFarm(v)
     Flags.AutoFarm = v
     if v then
         task.spawn(function()
-            local lastGuardFire = 0
-            local lastReachFire = 0
             while Flags.AutoFarm do
-                task.wait()
+                task.wait(0.15)
+                
                 local c = Player.Character
                 local root = getRoot(c)
                 if not root or not isActuallyPlaying(c) or ShotState.InProgress or ShotState.Paused then
-                    task.wait(0.5); continue
+                    continue
                 end
-                if tick() - inGameStamp < 3 then task.wait(0.3); continue end
+                if tick() - inGameStamp < 3 then continue end
 
                 local moveToPoint = c:GetAttribute("MoveToPoint")
                 if moveToPoint and moveToPoint ~= Vector3.new(0, 0, 0) then
@@ -531,7 +537,6 @@ local function ToggleAutoFarm(v)
                             local hum = getHum(c)
                             if hum then hum:MoveTo(target) end
                         end
-                        task.wait(0.2)
                         continue
                     end
                 end
@@ -543,12 +548,17 @@ local function ToggleAutoFarm(v)
                     local targetPos, holdOverride
                     local isSmartSpot = Flags.FarmSpot == "Auto 3-Pointer" or Flags.FarmSpot == "Auto Mid-Range"
                     if isSmartSpot then
-                        local dist = Flags.FarmSpot == "Auto 3-Pointer" and 42 or 25
+                        local dist = Flags.FarmSpot == "Auto 3-Pointer" and 50 or 30
                         targetPos = getSmartShootPos(dist)
                     else
                         local spot = SavedSpots[Flags.FarmSpot]
-                        if spot then targetPos = spot.position; holdOverride = spot.holdTime end
+                        if spot then targetPos = spot.position end
                     end
+                    
+                    if not Flags.FarmAutoGreen then
+                        holdOverride = 0.45
+                    end
+
                     if targetPos then
                         if Flags.FastTP then
                             fastTP(targetPos, true)
@@ -560,7 +570,6 @@ local function ToggleAutoFarm(v)
                             if dist > 3.5 then
                                 local hum = getHum(c)
                                 if hum then hum:MoveTo(targetPos) end
-                                task.wait(0.1)
                                 continue
                             else
                                 root.AssemblyLinearVelocity = Vector3.zero
@@ -569,50 +578,15 @@ local function ToggleAutoFarm(v)
                             end
                         end
                     end
-                end
-            end
-        end)
-    end
-end
-
--- NEW ISOLATED BALL RETRIEVAL LOOP
-local function ToggleAutoBallPickup(v)
-    Flags.AutoBallPickup = v
-    if v then
-        task.spawn(function()
-            while Flags.AutoBallPickup do
-                task.wait(0.15)
-                local c = Player.Character
-                if not c then continue end
-                
-                -- Skip if we already have the ball or recently shot
-                if c:FindFirstChild("Ball") then continue end
-                if ShotState.ReboundDebounce or ShotState.InProgress then continue end
-                
-                local looseBall = getLooseBall()
-                if looseBall then
-                    local root = getRoot(c)
-                    if not root then continue end
-
-                    if Flags.FastTP then
-                        -- Physics bypass fix: Teleport 2.5 studs away, then walk into it.
-                        local bPos = looseBall.Position
-                        local rPos = root.Position
-                        
-                        local flatDir = (Vector3.new(rPos.X, 0, rPos.Z) - Vector3.new(bPos.X, 0, bPos.Z))
-                        if flatDir.Magnitude < 0.1 then flatDir = Vector3.new(1, 0, 0) end
-                        local dir = flatDir.Unit
-                        
-                        fastTP(bPos + (dir * 2.5) + Vector3.new(0, 2.5, 0), false)
-                        
-                        -- Walk the rest of the way to force Touched collision
-                        local hum = getHum(c)
-                        if hum then hum:MoveTo(bPos) end
-                        
-                        task.wait(0.4) 
-                    else
-                        local hum = getHum(c)
-                        if hum then hum:MoveTo(looseBall.Position) end
+                elseif not hasBall and not ShotState.ReboundDebounce and Flags.AutoBallPickup then
+                    local looseBall = getLooseBall()
+                    if looseBall then
+                        if Flags.FastTP then
+                            fastTP(looseBall.Position, false)
+                        else
+                            local hum = getHum(c)
+                            if hum then hum:MoveTo(looseBall.Position) end
+                        end
                         task.wait(0.3)
                     end
                 end
@@ -623,9 +597,8 @@ end
 
 local function ToggleAutoMatch(v)
     Flags.AutoMatch = v
-    if v and IS_LOBBY then
+    if v and GetGameState().IsLobby then
         task.spawn(function()
-            local inQueueWait = false
             local lastQueueAttempt = 0
 
             while Flags.AutoMatch do
@@ -633,34 +606,40 @@ local function ToggleAutoMatch(v)
                 local c = Player.Character
                 local root = getRoot(c)
 
-                if not c or not root then inQueueWait = false; continue end
-                if isActuallyPlaying(c) then inQueueWait = false; continue end
+                if not c or not root then continue end
+                if isActuallyPlaying(c) then continue end
                 if tick() - outGameStamp < 4 then continue end
-                if c:GetAttribute("Queued") or c:GetAttribute("InQueue") or c:GetAttribute("State") == "Queue" then
-                    inQueueWait = true
-                end
-                if inQueueWait then continue end
+                
+                local isQueued = c:GetAttribute("Queued") or c:GetAttribute("InQueue") or (c:GetAttribute("State") == "Queue")
+                if isQueued then continue end 
 
-                local spot = workspace:FindFirstChild("Spots") and workspace.Spots:FindFirstChild("1v1")
+                local spot = get1v1Spot()
                 if spot and (tick() - lastQueueAttempt > 5) then
+                    
                     if Flags.FastTP then
-                        root.CFrame = spot.CFrame + Vector3.new(0, 3, 0)
+                        root.CFrame = spot.CFrame + Vector3.new(0, 1, 0)
+                        root.AssemblyLinearVelocity = Vector3.zero
                     else
                         local hum = getHum(c)
                         if hum then hum:MoveTo(spot.Position) end
                     end
 
                     task.wait(0.5)
-                    if (root.Position - spot.Position).Magnitude < 10 then
-                        pcall(function()
-                            local q = ReplicatedStorage:FindFirstChild("Queue")
-                            if q then
-                                q:FireServer({ JoinQueue = true })
-                                lastQueueAttempt = tick()
-                                inQueueWait = true
+                    
+                    for _, prompt in pairs(workspace:GetDescendants()) do
+                        if prompt:IsA("ProximityPrompt") and prompt.Parent then
+                            if (prompt.Parent.Position - root.Position).Magnitude < 15 then
+                                pcall(function() fireproximityprompt(prompt) end)
                             end
-                        end)
+                        end
                     end
+
+                    pcall(function()
+                        local q = ReplicatedStorage:FindFirstChild("Queue")
+                        if q then q:FireServer({ JoinQueue = true }) end
+                    end)
+                    
+                    lastQueueAttempt = tick()
                 end
             end
         end)
@@ -669,7 +648,7 @@ end
 
 local function ToggleOnly1v1(v)
     Flags.Only1v1 = v
-    if v and IS_MATCH then
+    if v and GetGameState().IsMatch then
         local totalPlayers = #Players:GetPlayers()
         if totalPlayers > 2 then
             Library:Notify({ Title = "Not a 1v1", Description = totalPlayers .. " players in this match. Leaving server.", Duration = 3 })
@@ -679,12 +658,12 @@ local function ToggleOnly1v1(v)
     end
 end
 
-if IS_MATCH and Flags.Only1v1 then
+if GetGameState().IsMatch and Flags.Only1v1 then
     task.spawn(function()
         task.wait(3)
         while Flags.Only1v1 do
             task.wait(5)
-            if not IS_MATCH then break end
+            if not GetGameState().IsMatch then break end
             local totalPlayers = #Players:GetPlayers()
             if totalPlayers > 2 then
                 Library:Notify({ Title = "Not a 1v1", Description = totalPlayers .. " players detected. Leaving to lobby.", Duration = 3 })
@@ -783,23 +762,14 @@ local function ToggleAutoTime(v)
     end
 end
 
-local function ToggleSpeedEnabled(v)
-    Flags.SpeedEnabled = v
-end
-
-local function ToggleInfiniteStamina(v)
-    Flags.InfiniteStamina = v
-end
-
+local function ToggleSpeedEnabled(v) Flags.SpeedEnabled = v end
+local function ToggleInfiniteStamina(v) Flags.InfiniteStamina = v end
 local function ToggleNoclip(v) Flags.Noclip = v end
 local function ToggleAutoStart(v) Flags.AutoStart = v end
-
 
 -- ═══════════════════════════════════════════════════════════════
 -- WINDOW UI
 -- ═══════════════════════════════════════════════════════════════
-
--- Changed the Title slightly to bypass the library's saved layout bug
 local Window = Library:CreateWindow({
     Title         = "BadgePlug v2 (Fixed Layout)",
     Footer        = "Made By Solo",
@@ -809,20 +779,20 @@ local Window = Library:CreateWindow({
     ToggleKeybind = Enum.KeyCode.LeftControl,
 })
 
--- ═══ TAB 1: AUTO FARM (everything in one place) ═══
+-- ═══ TAB 1: AUTO FARM ═══
 local FarmTab = Window:AddTab({ Name = "Auto Farm", Icon = "sprout" })
 local FarmL   = FarmTab:AddLeftGroupbox("Farm & Shoot")
 local FarmR   = FarmTab:AddRightGroupbox("Defense & Queue")
 
 UI.Toggles["AutoFarm"] = FarmL:AddToggle("AutoFarm", { Text = "Auto Farm (Walk/TP + Shoot)", Default = false, Callback = ToggleAutoFarm })
+UI.Toggles["FarmAutoGreen"] = FarmL:AddToggle("FarmAutoGreen", { Text = "Auto Green", Default = false, Callback = function(v) Flags.FarmAutoGreen = v end })
 UI.Options["FarmSpot"] = FarmL:AddDropdown("FarmSpot", { Text = "Shooting Spot", Values = {"Auto 3-Pointer", "Auto Mid-Range"}, Default = "Auto 3-Pointer", Callback = function(v) Flags.FarmSpot = v end })
-UI.Options["FarmHoldTime"] = FarmL:AddSlider("FarmHoldTime", { Text = "Shot Hold Time", Min = 0.15, Max = 2.0, Default = 0.45, Increment = 0.01, Suffix = "s", Rounding = 2, Callback = function(v) Flags.FarmHoldTime = v; if SavedSpots[Flags.FarmSpot] then SavedSpots[Flags.FarmSpot].holdTime = v end end })
 FarmL:AddButton({ Text = "Save Current Pos to Spot", Func = function()
     local root = getRoot(Player.Character)
     if root then SavedSpots[Flags.FarmSpot].position = root.Position; Library:Notify({ Title = "Spot Saved", Description = Flags.FarmSpot .. ": " .. tostring(root.Position), Duration = 3 }) end
 end})
 UI.Toggles["FastTP"] = FarmL:AddToggle("FastTP", { Text = "Fast TP (Off = Natural Walk)", Default = false, Callback = function(v) Flags.FastTP = v end })
-UI.Toggles["AutoBallRetrieve"] = FarmL:AddToggle("AutoBallRetrieve", { Text = "Auto Ball Retrieval", Default = false, Callback = ToggleAutoBallPickup })
+UI.Toggles["AutoBallPickup"] = FarmL:AddToggle("AutoBallPickup", { Text = "Auto Ball Retrieval", Default = false, Callback = function(v) Flags.AutoBallPickup = v end })
 
 FarmL:AddDivider()
 UI.Toggles["TPAntiContest"] = FarmL:AddToggle("TPAntiContest", { Text = "TP-Up When Shooting", Default = false, Callback = ToggleTPAntiContest })
@@ -832,7 +802,16 @@ UI.Options["TPHoldTime"] = FarmL:AddSlider("TPHoldTime", { Text = "TP Hold Time"
 UI.Toggles["AutoGuard"] = FarmR:AddToggle("AutoGuard", { Text = "Auto Guard", Default = false, Callback = ToggleAutoGuard })
 UI.Toggles["AutoSteal"] = FarmR:AddToggle("AutoSteal", { Text = "Auto Steal", Default = false, Callback = ToggleAutoSteal })
 UI.Toggles["AntiStun"] = FarmR:AddToggle("AntiStun", { Text = "Anti Stun", Default = false, Callback = function(v) Flags.AntiStun = v end })
-UI.Toggles["AntiOOB"] = FarmR:AddToggle("AntiOOB", { Text = "Anti Out of Bounds", Default = false, Callback = function(v) Flags.AntiOOB = v end })
+UI.Toggles["AntiOOB"] = FarmR:AddToggle("AntiOOB", { Text = "Anti Out of Bounds", Default = false, Callback = function(v) 
+    Flags.AntiOOB = v 
+    if not v then
+        for _, data in ipairs(hiddenOOB) do
+            if data.part then pcall(function() data.part.Parent = data.parent end) end
+        end
+        table.clear(hiddenOOB)
+        table.clear(oobCleaned)
+    end
+end })
 UI.Options["GuardDistance"] = FarmR:AddSlider("GuardDistance", { Text = "Guard Distance", Min = 0.5, Max = 10, Default = 1.5, Increment = 0.5, Suffix = " studs", Callback = function(v) Flags.GuardDistance = v end })
 
 FarmR:AddDivider()
@@ -847,7 +826,7 @@ local ShootR   = ShootTab:AddRightGroupbox("Feedback & Extras")
 
 UI.Toggles["AutoTime"] = ShootL:AddToggle("AutoTime", { Text = "Auto Time (hold E)", Default = false, Callback = ToggleAutoTime })
 UI.Toggles["SmartAI"] = ShootL:AddToggle("SmartAI", { Text = "Smart AI Timing Adjust", Default = false, Callback = function(v) Flags.SmartAI = v end })
-UI.Options["StartHoldTime"] = ShootL:AddSlider("StartHoldTime", { Text = "Starting Hold Time", Min = 0.15, Max = 2.0, Default = 0.50, Increment = 0.01, Suffix = "s", Rounding = 2, Callback = function(v)
+UI.Options["StartHoldTime"] = ShootL:AddSlider("StartHoldTime", { Text = "Starting Hold Time", Min = 0.15, Max = 2.0, Default = 0.45, Increment = 0.01, Suffix = "s", Rounding = 2, Callback = function(v)
     Flags.StartHoldTime = v
     for st in pairs(HoldTimes) do HoldTimes[st] = v end
 end })
@@ -866,13 +845,21 @@ UI.Toggles["SpeedEnabled"] = MoveL:AddToggle("SpeedEnabled", { Text = "Speed Mod
 UI.Options["SpeedMult"] = MoveL:AddSlider("SpeedMult", { Text = "Speed Multiplier", Min = 1, Max = 3, Default = 1, Increment = 0.01, Rounding = 2, Callback = function(v) Flags.SpeedMult = v end })
 UI.Toggles["InfiniteStamina"] = MoveL:AddToggle("InfiniteStamina", { Text = "Infinite Stamina", Default = false, Callback = ToggleInfiniteStamina })
 
--- ═══ TAB 4: SETTINGS & CONFIG ═══
+-- ═══ TAB 4: SETTINGS & CONFIG SYSTEM (Overhauled) ═══
 local SetTab = Window:AddTab({ Name = "Settings", Icon = "settings-2" })
 local SetL   = SetTab:AddLeftGroupbox("Config System")
 local SetR   = SetTab:AddRightGroupbox("Misc")
 
 local ConfigFolder = "GymBballConfigs"
-pcall(function() if isfolder and not isfolder(ConfigFolder) then makefolder(ConfigFolder) end end)
+
+local function SafeMakeFolder(path)
+    pcall(function()
+        if isfolder and not isfolder(path) then makefolder(path)
+        elseif not isfolder then makefolder(path) end
+    end)
+end
+
+SafeMakeFolder(ConfigFolder)
 
 local function GetAvailableConfigs()
     local list = {}
@@ -890,6 +877,14 @@ local function GetAvailableConfigs()
 end
 
 local configList = GetAvailableConfigs()
+
+SetL:AddInput("NewConfigName", {
+    Text = "New Config Name",
+    Default = "",
+    Placeholder = "Type name to create...",
+    Callback = function(v) Flags.NewConfigName = v end
+})
+
 local ConfigDrop = SetL:AddDropdown("SelectedConfig", {
     Text = "Select Config",
     Values = #configList > 0 and configList or {""},
@@ -897,13 +892,6 @@ local ConfigDrop = SetL:AddDropdown("SelectedConfig", {
     Callback = function(v)
         if v ~= "" then Flags.ConfigName = v end
     end
-})
-
-SetL:AddInput("NewConfigName", {
-    Text = "New Config Name",
-    Default = "",
-    Placeholder = "Type name to create...",
-    Callback = function(v) Flags.NewConfigName = v end
 })
 
 local function RefreshDropdown()
@@ -924,22 +912,82 @@ local function RefreshDropdown()
 end
 
 local function getSavePath(name) return ConfigFolder .. "/" .. name .. ".json" end
-
 local SKIP_SAVE_KEYS = { ConfigName = true, NewConfigName = true, ScoreTracker = true }
 
+local function SaveConfigData(name)
+    if not name or name == "" then return false end
+    
+    local saveable = {}
+    for k, v in pairs(Flags) do
+        if not SKIP_SAVE_KEYS[k] and (type(v) == "boolean" or type(v) == "number" or type(v) == "string") then
+            saveable[k] = v
+        end
+    end
+
+    local config = { Flags = saveable, HoldTimes = HoldTimes, SavedSpots = {} }
+    
+    for k, v in pairs(SavedSpots) do
+        config.SavedSpots[k] = { 
+            position = v.position and {v.position.X, v.position.Y, v.position.Z} or {0,0,0}, 
+            scoreType = v.scoreType or 2, 
+            distance = v.distance or 30 
+        }
+    end
+
+    SafeMakeFolder(ConfigFolder)
+    local success, err = pcall(function()
+        writefile(getSavePath(name), HttpService:JSONEncode(config))
+    end)
+    
+    return success
+end
+
+SetL:AddButton({ Text = "Create Config", Func = function()
+    local name = Flags.NewConfigName
+    if not name or name == "" then
+        Library:Notify({ Title = "Error", Description = "Please enter a name in the text box above.", Duration = 3 })
+        return
+    end
+
+    if SaveConfigData(name) then
+        Library:Notify({ Title = "Created", Description = "Successfully created: " .. name, Duration = 3 })
+        Flags.ConfigName = name
+        RefreshDropdown()
+    else
+        Library:Notify({ Title = "File Error", Description = "Your executor blocks saving files.", Duration = 4 })
+    end
+end})
+
+SetL:AddButton({ Text = "Overwrite Selected Config", Func = function()
+    local name = Flags.ConfigName
+    if not name or name == "" then
+        Library:Notify({ Title = "Error", Description = "No config selected to overwrite.", Duration = 3 })
+        return
+    end
+
+    if SaveConfigData(name) then
+        Library:Notify({ Title = "Saved", Description = "Overwrote settings to: " .. name, Duration = 3 })
+    else
+        Library:Notify({ Title = "File Error", Description = "Your executor blocks saving files.", Duration = 4 })
+    end
+end})
+
 local function LoadConfigByName(name)
-    if not name or name == "" or name == "" then return false end
+    if not name or name == "" then return false end
     local file = getSavePath(name)
-    if not isfile or not isfile(file) then return false end
-    local ok, config = pcall(function() return HttpService:JSONDecode(readfile(file)) end)
+    
+    local success, fileData = pcall(function()
+        if isfile and not isfile(file) then return nil end
+        return readfile(file)
+    end)
+    
+    if not success or not fileData then return false end
+    
+    local ok, config = pcall(function() return HttpService:JSONDecode(fileData) end)
     if not ok or not config then return false end
 
     if config.Flags then
         for k, v in pairs(config.Flags) do
-            if k == "AutoMatch" or k == "AutoFarm" or k == "AutoGuard" or k == "AutoSteal" or k == "AutoTime" then
-                Flags[k] = v
-                continue
-            end
             if UI.Toggles[k] then UI.Toggles[k]:SetValue(v) end
             if UI.Options[k] then UI.Options[k]:SetValue(v) end
         end
@@ -954,7 +1002,6 @@ local function LoadConfigByName(name)
                 SavedSpots[k] = SavedSpots[k] or {}
                 SavedSpots[k].position = Vector3.new(v.position[1], v.position[2], v.position[3])
             end
-            if v.holdTime then SavedSpots[k].holdTime = v.holdTime end
             if v.scoreType then SavedSpots[k].scoreType = v.scoreType end
             if v.distance then SavedSpots[k].distance = v.distance end
         end
@@ -962,84 +1009,58 @@ local function LoadConfigByName(name)
     return true
 end
 
-SetL:AddButton({ Text = "Save Config", Func = function()
-    local name = (Flags.NewConfigName and Flags.NewConfigName ~= "") and Flags.NewConfigName or Flags.ConfigName
-    if not name or name == "" or name == "" then
-        Library:Notify({ Title = "Error", Description = "Type a config name first.", Duration = 3 })
-        return
-    end
-
-    local saveable = {}
-    for k, v in pairs(Flags) do
-        if not SKIP_SAVE_KEYS[k] and (type(v) == "boolean" or type(v) == "number" or type(v) == "string") then
-            saveable[k] = v
-        end
-    end
-
-    local config = { Flags = saveable, HoldTimes = HoldTimes, SavedSpots = {} }
-    for k, v in pairs(SavedSpots) do
-        config.SavedSpots[k] = { position = {v.position.X, v.position.Y, v.position.Z}, holdTime = v.holdTime, scoreType = v.scoreType, distance = v.distance }
-    end
-
-    pcall(function() if isfolder and not isfolder(ConfigFolder) then makefolder(ConfigFolder) end end)
-
-    if writefile then
-        writefile(getSavePath(name), HttpService:JSONEncode(config))
-        Library:Notify({ Title = "Config Saved", Description = "Saved: " .. name, Duration = 3 })
-        Flags.NewConfigName = ""
-        Flags.ConfigName = name
-        RefreshDropdown()
-    end
-end})
-
 SetL:AddButton({ Text = "Load Config", Func = function()
     local name = Flags.ConfigName
-    if not name or name == "" or name == "" then
+    if not name or name == "" then
         Library:Notify({ Title = "Error", Description = "Select a config first.", Duration = 3 })
         return
     end
     if LoadConfigByName(name) then
         Library:Notify({ Title = "Config Loaded", Description = "Loaded: " .. name, Duration = 3 })
     else
-        Library:Notify({ Title = "Error", Description = "Config not found: " .. name, Duration = 3 })
+        Library:Notify({ Title = "Error", Description = "Config corrupted or missing: " .. name, Duration = 3 })
     end
 end})
 
 SetL:AddButton({ Text = "Delete Config", Func = function()
     local name = Flags.ConfigName
-    if not name or name == "" or name == "" then return end
+    if not name or name == "" then return end
+    
     local file = getSavePath(name)
     pcall(function()
-        if delfile and isfile and isfile(file) then
-            delfile(file)
-            Library:Notify({ Title = "Deleted", Description = "Deleted: " .. name, Duration = 3 })
-        end
+        if delfile then delfile(file) end
     end)
+    
+    Library:Notify({ Title = "Deleted", Description = "Deleted config: " .. name, Duration = 3 })
     Flags.ConfigName = ""
     RefreshDropdown()
 end})
 
 SetL:AddButton({ Text = "Set as Auto-Load", Func = function()
     local name = Flags.ConfigName
-    if not name or name == "" or name == "" then
+    if not name or name == "" then
         Library:Notify({ Title = "Error", Description = "Select a config first.", Duration = 3 })
         return
     end
-    pcall(function() if isfolder and not isfolder(ConfigFolder) then makefolder(ConfigFolder) end end)
-    if writefile then
+    SafeMakeFolder(ConfigFolder)
+    
+    local success = pcall(function()
         writefile(ConfigFolder .. "/Autoload.txt", name)
+    end)
+    
+    if success then
         Library:Notify({ Title = "Auto-Load Set", Description = name .. " will load on next run.", Duration = 4 })
+    else
+        Library:Notify({ Title = "Error", Description = "Failed to set Auto-Load.", Duration = 3 })
     end
 end})
 
 SetL:AddButton({ Text = "Clear Auto-Load", Func = function()
-    pcall(function()
+    local success = pcall(function()
         local path = ConfigFolder .. "/Autoload.txt"
-        if delfile and isfile and isfile(path) then
-            delfile(path)
-            Library:Notify({ Title = "Auto-Load Cleared", Description = "No config will auto-load.", Duration = 3 })
-        end
+        if delfile then delfile(path) end
     end)
+    Library:Notify({ Title = "Auto-Load Cleared", Description = "No config will auto-load.", Duration = 3 })
 end})
 
 UI.Toggles["AutoHide"] = SetR:AddToggle("AutoHide", { Text = "Auto Hide on Execute", Default = Flags.AutoHide, Callback = function(v) Flags.AutoHide = v end })
@@ -1051,16 +1072,20 @@ Player.Idled:Connect(function() if Flags.AntiAFK then game:GetService("VirtualUs
 task.spawn(function()
     task.wait(1)
     local autoLoadPath = ConfigFolder .. "/Autoload.txt"
-    if isfile and isfile(autoLoadPath) then
-        local autoName = readfile(autoLoadPath)
-        if autoName and autoName ~= "" then
-            if LoadConfigByName(autoName) then
-                Flags.ConfigName = autoName
-                RefreshDropdown()
-                Library:Notify({ Title = "Auto-Load", Description = "Loaded profile: " .. autoName, Duration = 5 })
-            end
+    local autoName = nil
+    
+    pcall(function()
+        if isfile and isfile(autoLoadPath) then autoName = readfile(autoLoadPath) 
+        elseif not isfile then autoName = readfile(autoLoadPath) end
+    end)
+    
+    if autoName and autoName ~= "" then
+        if LoadConfigByName(autoName) then
+            Flags.ConfigName = autoName
+            RefreshDropdown()
+            Library:Notify({ Title = "Auto-Load", Description = "Loaded profile: " .. autoName, Duration = 5 })
         end
     end
 end)
 
-Library:Notify({ Title = "Gym Basketball OP v8.4", Description = "LCtrl to toggle UI.", Duration = 5 })
+Library:Notify({ Title = "Gym Basketball OP v8.12", Description = "LCtrl to toggle UI.", Duration = 5 })
