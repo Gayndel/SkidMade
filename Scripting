@@ -1,5 +1,1023 @@
+-- ═══════════════════════════════════════════════════════════════
+-- GYM BASKETBALL OP v8.0 - Obsidian UI
+-- Dashboard + Auto-Farm + Badges + Attributes + 1v1 + Config
+-- ═══════════════════════════════════════════════════════════════
+
+if not game:IsLoaded() then game.Loaded:Wait() end
+
+-- ═══ PLACE DETECTION ═══
+local MAIN_MENU_PLACE  = 18474291382
+local QUICK_PLAY_PLACE = 18517963950
+local IS_MAIN_MENU = (game.PlaceId == MAIN_MENU_PLACE)
+
+local Players          = game:GetService("Players")
+local RunService       = game:GetService("RunService")
+local UserInputService = game:GetService("UserInputService")
+local ReplicatedStorage= game:GetService("ReplicatedStorage")
+local TweenService     = game:GetService("TweenService")
+local HttpService      = game:GetService("HttpService")
+local TeleportService  = game:GetService("TeleportService")
+local Lighting         = game:GetService("Lighting")
+
+local Player = Players.LocalPlayer
+
+-- ═══ ANTI-KICK (hookmetamethod based) ═══
+pcall(function()
+    local oldNamecall
+    oldNamecall = hookmetamethod(game, "__namecall", newcclosure(function(self, ...)
+        local method = getnamecallmethod()
+        if method == "Kick" and self == Player then
+            return nil
+        end
+        return oldNamecall(self, ...)
+    end))
+end)
+
+-- ═══ FLAGS ═══
+local Flags = {
+    -- Shooting
+    AutoTime        = false,
+    SmartAI         = false,
+    AdjustStep      = 0.05,
+    StartHoldTime   = 0.55,
+    ShotFeedbackHUD = false,
+    NoMeter         = false,
+    AutoDunk        = false,
+
+    -- Auto Farm
+    AutoFarm        = false,
+    FarmSpot        = "3-Pointer",
+    FarmHoldTime    = 0.45,
+    FastTP          = true,
+    TPAntiContest   = false,
+    TPHeight        = 14,
+    TPStayUp        = false,
+    AutoGuard       = false,
+    AutoSteal       = false,
+    GuardDistance    = 1.5,
+    GuardSpeed      = 1,
+    AntiStun        = false,
+    DisableRendering = false,
+
+    -- Movement
+    SpeedEnabled    = false,
+    SpeedMult       = 1,
+    Noclip          = false,
+    InfiniteStamina = false,
+
+    -- Matchmaking
+    AutoMatch       = false,
+    Only1v1         = true,
+    AutoQuickPlay   = false,
+
+    -- Badge Upgrade
+    AutoBadgeUpgrade = false,
+    SelectedBadge    = "",
+    SelectedBadgeCategory = "All",
+
+    -- Attribute Upgrade
+    AutoAttrUpgrade  = false,
+    SelectedAttrCategory = "Shooting",
+
+    -- Config
+    AutoSaveConfig  = false,
+    ConfigName      = "default",
+    AutoExecuteOnTP = false,
+    AutoExecuteString = 'loadstring(game:HttpGet("YOUR_LINK_HERE"))()',
+
+    -- Misc
+    AntiAFK         = true,
+    ScoreTracker    = 0,
+}
+
+-- ═══ MATCHMAKING SPOT POSITIONS ═══
+local SPOT_1V1 = Vector3.new(-170.367, 30.325, 50.1)
+
+-- ═══ SAVED SPOTS ═══
+local SavedSpots = {
+    ["3-Pointer"] = {
+        position = Vector3.new(-101.24, 70.36, 84.10),
+        holdTime = 0.45, scoreType = 3, distance = 52.16,
+    },
+    ["Mid-Range"] = {
+        position = Vector3.new(-100.68, 70.37, 108.21),
+        holdTime = 0.45, scoreType = 2, distance = 28.74,
+    },
+}
+
+-- ═══ TIMING STATE ═══
+local HoldTimes = {
+    Standing = 0.55, OffDribble = 0.55, Moving = 0.55,
+    Layup = 0.55, PostHook = 0.55, PostFade = 0.55,
+    Dunk = 0.55, Floater = 0.55, default = 0.55,
+}
+local ShotCounts   = {}
+local LastShotType = "default"
+local ShotInProgress = false
+local ReboundDebounce = false
+
+-- ═══ BADGE / ATTRIBUTE CATEGORY MAPS ═══
+local BADGE_CATEGORIES = {"Defending", "Finishing", "Playmaking", "Shooting"}
+local BADGE_TO_CATEGORY = {
+    ["Late Contender"]="Defending",Clamps="Defending",["Rebound Chaser"]="Defending",Magnet="Defending",
+    ["Brick Wall"]="Defending",["Post Anchor"]="Defending",Extinguisher="Defending",Thief="Defending",
+    ["Ankle Braces"]="Defending",Intimidator="Defending",["Pogo Stick"]="Defending",
+    Posterizer="Finishing",["Jelly Flay"]="Finishing",["Slithery Finisher"]="Finishing",
+    ["Acrobatic Finisher"]="Finishing",["Hot Finisher"]="Finishing",["Tireless Post Scorer"]="Finishing",
+    ["Consistent Finisher"]="Finishing",["Giant Slayer"]="Finishing",["Elusive Finisher"]="Finishing",
+    ["Limitless Takeoff"]="Finishing",["Tireless Finisher"]="Finishing",["Hook Specialist"]="Finishing",
+    ["Tear Dropper"]="Finishing",
+    ["Hot Assist"]="Playmaking",["Handles For Days"]="Playmaking",["Quick Handles"]="Playmaking",
+    Unpluckable="Playmaking",Dimer="Playmaking",["Pick Dodger"]="Playmaking",
+    ["Lightning Pass"]="Playmaking",["Bail Out"]="Playmaking",["Lob Pass"]="Playmaking",
+    ["Post Playmaker"]="Playmaking",["Touch Passer"]="Playmaking",["Ankle Breaker"]="Playmaking",
+    ["Space Creator"]="Playmaking",
+    ["Inside Shooter"]="Shooting",["Tireless Shooter"]="Shooting",["Steady Scorer"]="Shooting",
+    ["Quick Shot"]="Shooting",["Ankle Finisher"]="Shooting",["Range Extender"]="Shooting",
+    Deadeye="Shooting",["Post Maestro"]="Shooting",["Green Machine"]="Shooting",
+    ["Difficult Shots"]="Shooting",["Open Looks"]="Shooting",["Catch And Shoot"]="Shooting",
+    ["Corner Specialist"]="Shooting",["Hot Shot"]="Shooting",["Fade Specialist"]="Shooting",
+}
+
+local ATTR_CATEGORIES = {
+    Shooting  = {"Three-Point Shot","Mid-Range Shot","Moving Three-Pointer","Moving Two-Pointer","Post Fade","Post Hook"},
+    Finishing = {"Driving Layup","Floater","Driving Dunk","Standing Dunk"},
+    Playmaking= {"Handles","Speed With-Ball","Pass Accuracy","Post Moves"},
+    Defending = {"Block","Steal","Rebound","Interior Defense","Perimeter Defense","Strength"},
+    Physical  = {"Speed","Acceleration","Stamina"},
+}
+
+-- ═══════════════════════════════════════════════════════════════
+-- MAIN MENU AUTO QUICK-PLAY
+-- ═══════════════════════════════════════════════════════════════
+if IS_MAIN_MENU then
+    local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/deividcomsono/Obsidian/refs/heads/main/Library.lua"))()
+    local Window = Library:CreateWindow({
+        Title = "Gym Basketball OP v8 — Main Menu",
+        Footer = "Obsidian | Auto Quick-Play | RCtrl",
+        Size = UDim2.fromOffset(420, 220),
+        Center = true, AutoShow = true,
+        ToggleKeybind = Enum.KeyCode.RightControl,
+    })
+    local Tab = Window:AddTab({ Name = "Quick Play", Icon = "play" })
+    local Box = Tab:AddLeftGroupbox("Auto Join")
+
+    Box:AddToggle("AutoQuickPlay", {
+        Text = "Auto Quick-Play (join lobby)",
+        Default = false,
+        Tooltip = "Sets your current slot and teleports to the matchmaking lobby.",
+        Callback = function(v)
+            if not v then return end
+            task.spawn(function()
+                Library:Notify({ Title = "Quick Play", Description = "Waiting for game to load...", Duration = 3 })
+                repeat task.wait(0.5) until Player:GetAttribute("Loaded")
+                local pd = Player:WaitForChild("PlayerData", 10)
+                if not pd then Library:Notify({ Title = "Error", Description = "PlayerData not found.", Duration = 3 }); return end
+                local currentSlot = tostring(pd:WaitForChild("CurrentSlot").Value)
+                Library:Notify({ Title = "Quick Play", Description = "Teleporting to lobby (slot " .. currentSlot .. ")...", Duration = 3 })
+                pcall(function()
+                    ReplicatedStorage:WaitForChild("Remote"):FireServer({ Action = "SetSlot", Slot = currentSlot })
+                end)
+                task.wait(1.5)
+                TeleportService:Teleport(QUICK_PLAY_PLACE, Player)
+            end)
+        end,
+    })
+
+    Box:AddButton({ Text = "Quick-Play Now", Func = function()
+        task.spawn(function()
+            repeat task.wait(0.5) until Player:GetAttribute("Loaded")
+            local pd = Player:WaitForChild("PlayerData", 10)
+            if not pd then return end
+            local currentSlot = tostring(pd:WaitForChild("CurrentSlot").Value)
+            pcall(function()
+                ReplicatedStorage:WaitForChild("Remote"):FireServer({ Action = "SetSlot", Slot = currentSlot })
+            end)
+            task.wait(1.5)
+            TeleportService:Teleport(QUICK_PLAY_PLACE, Player)
+        end)
+    end })
+
+    -- Queue on teleport
+    local function TriggerQueue()
+        if Flags.AutoExecuteOnTP and Flags.AutoExecuteString ~= "" then
+            local qot = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport) or (getgenv and getgenv().queue_on_teleport)
+            if qot then pcall(function() qot(Flags.AutoExecuteString) end) end
+        end
+    end
+    TriggerQueue()
+    Player.OnTeleport:Connect(TriggerQueue)
+
+    -- Anti-AFK
+    local VirtualUser = game:GetService("VirtualUser")
+    Player.Idled:Connect(function() VirtualUser:CaptureController(); VirtualUser:ClickButton2(Vector2.new(0,0)) end)
+
+    Library:Notify({ Title = "Gym Basketball OP v8", Description = "Main Menu detected. Use Auto Quick-Play to join lobby.", Duration = 6 })
+    return
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- GAME LOBBY CODE (only runs if NOT main menu)
+-- ═══════════════════════════════════════════════════════════════
+local Library = loadstring(game:HttpGet("https://raw.githubusercontent.com/deividcomsono/Obsidian/refs/heads/main/Library.lua"))()
+
+local Remotes = ReplicatedStorage:WaitForChild("Remotes")
+local ActionRemote = Remotes:WaitForChild("Server"):WaitForChild("Action")
+local EditBadgeTierRemote = Remotes:WaitForChild("Server"):WaitForChild("EditBadgeTier")
+local GetDataRemote = ReplicatedStorage:WaitForChild("GetData")
+local QueueRemote = ReplicatedStorage:WaitForChild("Queue")
+
+-- ═══ CONFIG SYSTEM ═══
+local function getConfigName()
+    local name = Flags.ConfigName
+    if not name or name == "" then name = "default" end
+    return "GymBasketballOP_" .. name .. ".json"
+end
+
+local function getAvailableConfigs()
+    local list = {"default"}
+    if listfiles then
+        local s, files = pcall(function() return listfiles("") end)
+        if s and type(files) == "table" then
+            for _, file in pairs(files) do
+                local name = file:match("GymBasketballOP_(.*)%.json")
+                if name and name ~= "default" then table.insert(list, name) end
+            end
+        end
+    end
+    return list
+end
+
+local function saveConfig(silent)
+    local ConfigFile = getConfigName()
+    local config = { Flags = {}, HoldTimes = HoldTimes, SavedSpots = {} }
+    for k, v in pairs(Flags) do
+        if type(v) == "boolean" or type(v) == "number" or type(v) == "string" then config.Flags[k] = v end
+    end
+    for k, v in pairs(SavedSpots) do
+        config.SavedSpots[k] = { position = {v.position.X, v.position.Y, v.position.Z}, holdTime = v.holdTime, scoreType = v.scoreType, distance = v.distance }
+    end
+    if writefile then
+        writefile(ConfigFile, HttpService:JSONEncode(config))
+        if not silent then Library:Notify({ Title = "Config", Description = "Saved: " .. ConfigFile, Duration = 3 }) end
+    end
+end
+
+local function loadConfig(fileOverride, silent)
+    local ConfigFile = fileOverride or getConfigName()
+    if not isfile or not isfile(ConfigFile) then
+        if not silent then Library:Notify({ Title = "Config", Description = "Not found: " .. ConfigFile, Duration = 3 }) end
+        return false
+    end
+    local ok, config = pcall(function() return HttpService:JSONDecode(readfile(ConfigFile)) end)
+    if not ok or not config then return false end
+    if config.Flags then for k, v in pairs(config.Flags) do Flags[k] = v end end
+    if config.HoldTimes then for k, v in pairs(config.HoldTimes) do HoldTimes[k] = v end end
+    if config.SavedSpots then
+        for k, v in pairs(config.SavedSpots) do
+            if v.position and type(v.position) == "table" then
+                SavedSpots[k] = { position = Vector3.new(v.position[1], v.position[2], v.position[3]), holdTime = v.holdTime, scoreType = v.scoreType, distance = v.distance }
+            end
+        end
+    end
+    if not silent then Library:Notify({ Title = "Config", Description = "Loaded: " .. ConfigFile, Duration = 3 }) end
+    return true
+end
+
+if isfile and isfile("GymBasketballOP_Autoload.txt") then
+    local autoName = readfile("GymBasketballOP_Autoload.txt")
+    if autoName and autoName ~= "" then
+        if loadConfig("GymBasketballOP_" .. autoName .. ".json", true) then Flags.ConfigName = autoName end
+    end
+end
+
+-- ═══ HELPERS ═══
+local function getRoot(char) return char and char:FindFirstChild("HumanoidRootPart") end
+local function getHum(char)  return char and char:FindFirstChildOfClass("Humanoid") end
+
+local function unstickChar()
+    local c = Player.Character; if not c then return end
+    local action = c:GetAttribute("Action")
+    if action == "Shooting" or action == "Dunking" then
+        pcall(function() ActionRemote:FireServer({Type="Shoot", Shoot=false}) end)
+        c:SetAttribute("Action", ""); c:SetAttribute("Released", true)
+    end
+    c:SetAttribute("Stunned", false); c:SetAttribute("PushStun", false)
+    local root = getRoot(c); if root then root.Anchored = false end
+end
+
+local function getShotType()
+    local c = Player.Character; if not c then return "default" end
+    local st = c:GetAttribute("Action") or ""
+    local gather = c:GetAttribute("GatherType") or ""
+    if st == "Dunking"              then return "Dunk"     end
+    if gather:find("Layup")         then return "Layup"    end
+    if gather:find("Floater")       then return "Floater"  end
+    if gather:find("PostHook")      then return "PostHook" end
+    if gather:find("PostFade")      then return "PostFade" end
+    local hum = getHum(c)
+    if hum and hum.MoveDirection.Magnitude > 0.1 then return "Moving" end
+    return "Standing"
+end
+
+local function getHoopGoal()
+    local c = Player.Character; if not c then return nil end
+    local data = c:FindFirstChild("Data"); if not data then return nil end
+    local hoopVal = data:FindFirstChild("Hoop")
+    if not hoopVal or not hoopVal.Value then return nil end
+    return hoopVal.Value:FindFirstChild("Goal", true) or hoopVal.Value:FindFirstChild("RimMesh", true) or hoopVal.Value:FindFirstChild("Rim", true)
+end
+
+local function getHoopPosition()
+    local goal = getHoopGoal(); return goal and goal.Position or nil
+end
+
+local function getMyTeam()
+    return Player:GetAttribute("Team") or Player:GetAttribute("PlrTeam") or (Player.Team and Player.Team.Name)
+end
+
+local function getPlayerTeam(p)
+    return p:GetAttribute("Team") or p:GetAttribute("PlrTeam") or (p.Team and p.Team.Name)
+end
+
+local function getNearestBallHandler()
+    local char = Player.Character; if not char then return nil end
+    local root = getRoot(char); if not root then return nil end
+    local myTeam = getMyTeam()
+    local nearest, dist = nil, math.huge
+    for _, p in pairs(Players:GetPlayers()) do
+        if p ~= Player and p.Character and p.Character:FindFirstChild("Ball") then
+            if getPlayerTeam(p) ~= myTeam then
+                local r = getRoot(p.Character)
+                if r then local d = (r.Position - root.Position).Magnitude; if d < dist then dist = d; nearest = p end end
+            end
+        end
+    end
+    return nearest
+end
+
+local function getLooseBall()
+    local char = Player.Character; if not char then return nil end
+    local root = getRoot(char); if not root then return nil end
+    local nearest, dist = nil, math.huge
+    for _, obj in pairs(workspace:GetDescendants()) do
+        if obj.Name == "Ball" and obj:IsA("BasePart") and not obj.Anchored then
+            if math.abs(obj.Position.Y - root.Position.Y) > 15 then continue end
+            local parentName = obj.Parent and obj.Parent.Name or ""
+            if parentName == "AnimRig" or parentName == "AnimationRig" then continue end
+            local held = false
+            for _, p in pairs(Players:GetPlayers()) do
+                if p.Character and p.Character:FindFirstChild("Ball") == obj then held = true; break end
+            end
+            if not held then
+                local d = (obj.Position - root.Position).Magnitude
+                if d < dist then dist = d; nearest = obj end
+            end
+        end
+    end
+    return nearest
+end
+
+local function fastTP(targetPos, lookAtGoal)
+    local c = Player.Character; if not c then return false end
+    local root = getRoot(c); if not root then return false end
+    if lookAtGoal then
+        local goal = getHoopPosition()
+        if goal then root.CFrame = CFrame.new(targetPos, Vector3.new(goal.X, targetPos.Y, goal.Z)); return true end
+    end
+    root.CFrame = CFrame.new(targetPos); return true
+end
+
+-- ═══ SHOT FEEDBACK HUD ═══
+local FeedbackGui, FeedbackLabel = nil, nil
+local TimingColors = {
+    PERFECT = Color3.fromRGB(18,255,6), Good = Color3.fromRGB(255,255,255),
+    ["Slightly Early"] = Color3.fromRGB(238,238,0), ["Slightly Late"] = Color3.fromRGB(238,238,0),
+    Early = Color3.fromRGB(255,118,5), Late = Color3.fromRGB(255,118,5),
+    ["Very Early"] = Color3.fromRGB(255,0,0), ["Very Late"] = Color3.fromRGB(255,0,0),
+}
+
+local function createFeedbackHUD()
+    if FeedbackGui then return end
+    FeedbackGui = Instance.new("ScreenGui"); FeedbackGui.Name = "ShotFeedbackHUD"; FeedbackGui.ResetOnSpawn = false; FeedbackGui.ZIndexBehavior = Enum.ZIndexBehavior.Sibling; FeedbackGui.Parent = game.CoreGui
+    FeedbackLabel = Instance.new("TextLabel"); FeedbackLabel.Size = UDim2.new(0,280,0,50); FeedbackLabel.Position = UDim2.new(1,-300,0,60); FeedbackLabel.BackgroundColor3 = Color3.fromRGB(20,20,20); FeedbackLabel.BackgroundTransparency = 0.3; FeedbackLabel.Text = ""; FeedbackLabel.TextColor3 = Color3.fromRGB(255,255,255); FeedbackLabel.TextScaled = true; FeedbackLabel.Font = Enum.Font.GothamBold; FeedbackLabel.Parent = FeedbackGui
+    Instance.new("UICorner", FeedbackLabel).CornerRadius = UDim.new(0,8)
+    Instance.new("UIStroke", FeedbackLabel).Color = Color3.fromRGB(60,60,60); FeedbackLabel.Parent:FindFirstChildOfClass("UIStroke").Thickness = 2
+    FeedbackLabel.TextTransparency = 1; FeedbackLabel.BackgroundTransparency = 1
+end
+
+local function destroyFeedbackHUD() if FeedbackGui then FeedbackGui:Destroy(); FeedbackGui = nil; FeedbackLabel = nil end end
+
+local function showFeedback(timing, holdTime)
+    if not FeedbackLabel then return end
+    FeedbackLabel.Text = string.upper(timing) .. "  |  " .. string.format("%.3f", holdTime) .. "s"
+    FeedbackLabel.TextColor3 = TimingColors[timing] or Color3.fromRGB(180,180,180)
+    TweenService:Create(FeedbackLabel, TweenInfo.new(0.2), {TextTransparency = 0, BackgroundTransparency = 0.3}):Play()
+    task.delay(3, function() if FeedbackLabel then TweenService:Create(FeedbackLabel, TweenInfo.new(0.5), {TextTransparency = 1, BackgroundTransparency = 1}):Play() end end)
+end
+
+local function adjustTiming(timing, shotType)
+    if not timing or timing == "DEFAULT" or timing == "PERFECT" then return end
+    local step = Flags.AdjustStep; local delta = 0
+    if timing == "Very Early" then delta = step elseif timing == "Slightly Early" then delta = step * 0.6 elseif timing == "Early" then delta = step * 0.4 elseif timing == "Good" then delta = step * 0.2 elseif timing == "Slightly Late" then delta = -step * 0.6 elseif timing == "Late" then delta = -step * 0.4 elseif timing == "Very Late" then delta = -step end
+    HoldTimes[shotType] = math.clamp((HoldTimes[shotType] or HoldTimes.default) + delta, 0.15, 2.0)
+    ShotCounts[shotType] = (ShotCounts[shotType] or 0) + 1
+end
+
+local function executeShot(holdTimeOverride)
+    local c = Player.Character; if not c or not c:FindFirstChild("Ball") then return end
+    if ShotInProgress then return end
+    local action = c:GetAttribute("Action") or ""; if action == "Shooting" or action == "Dunking" then return end
+    ShotInProgress = true; ReboundDebounce = true; LastShotType = getShotType()
+    local holdTime = holdTimeOverride or HoldTimes[LastShotType] or HoldTimes.default
+    pcall(function() ActionRemote:FireServer({Type="Shoot", Shoot=true, HoldingQ=UserInputService:IsKeyDown(Enum.KeyCode.Q), HoldingL1=false}) end)
+    task.delay(holdTime, function() if ShotInProgress then pcall(function() ActionRemote:FireServer({Type="Shoot", Shoot=false}) end) end end)
+    task.spawn(function()
+        local timeout = tick() + 4
+        repeat task.wait(0.05) until c:GetAttribute("Released") == true or tick() > timeout or not c.Parent
+        local timing = c:GetAttribute("Timing")
+        if timing and timing ~= "DEFAULT" then
+            if Flags.SmartAI then adjustTiming(timing, LastShotType) end
+            if timing == "PERFECT" then HoldTimes[LastShotType] = holdTime; Flags.ScoreTracker = Flags.ScoreTracker + 1 end
+            if Flags.ShotFeedbackHUD then showFeedback(timing, holdTime) end
+        end
+        task.wait(1.5); ReboundDebounce = false; ShotInProgress = false
+    end)
+end
+
+-- ═══ BADGE DATA ═══
+local CachedBadgeList = {}
+
+local function refreshBadgeData()
+    pcall(function()
+        local data = GetDataRemote:InvokeServer()
+        if not data then return end
+        local slot = data.Slots[tostring(data.CurrentSlot)]
+        if not slot or not slot.Badges then return end
+        CachedBadgeList = {}
+        for name, info in pairs(slot.Badges) do
+            table.insert(CachedBadgeList, {
+                name = name, currentTier = info.CurrentTier, maxTier = info.MaxTier,
+                category = BADGE_TO_CATEGORY[name] or "Unknown",
+            })
+        end
+        table.sort(CachedBadgeList, function(a, b) return a.name < b.name end)
+    end)
+end
+
+local function getUpgradeableBadges(category)
+    local result = {}
+    for _, badge in pairs(CachedBadgeList) do
+        if badge.maxTier > 0 and badge.currentTier < badge.maxTier then
+            if category == "All" or badge.category == category then
+                table.insert(result, badge.name)
+            end
+        end
+    end
+    table.sort(result)
+    return result
+end
+
+local function getBadgePointsForCategory(category)
+    local data = GetDataRemote:InvokeServer()
+    if not data then return 0 end
+    local slot = data.Slots[tostring(data.CurrentSlot)]
+    if not slot or not slot.BadgePoints or not slot.BadgePoints[category] then return 0 end
+    return slot.BadgePoints[category].BadgePoints or 0
+end
+
+-- ═══ MATCHMAKING ═══
+local function countPlayersInGame()
+    local count = 0
+    for _, p in pairs(Players:GetPlayers()) do
+        if p.Character then
+            local inGame = p.Character:GetAttribute("InGame")
+            if inGame and inGame ~= "" then count = count + 1 end
+        end
+    end
+    return count
+end
+
+local function leaveQueue() pcall(function() QueueRemote:FireServer({LeaveQueue = true}) end) end
+
+local function joinQueue1v1()
+    local c = Player.Character; if not c then return end
+    local root = getRoot(c); if not root then return end
+    root.CFrame = CFrame.new(SPOT_1V1 + Vector3.new(0, 3, 0))
+    root.AssemblyLinearVelocity = Vector3.zero
+    task.wait(0.3)
+    pcall(function() QueueRemote:FireServer({JoinQueue = true}) end)
+end
+
+-- ═══ DASHBOARD DATA ═══
+local DashData = { coins = 0, wins = 0, losses = 0, ovr = 0, streak = 0, greens = 0, slot = 1 }
+
+local function refreshDashData()
+    pcall(function()
+        local pd = Player:FindFirstChild("PlayerData"); if not pd then return end
+        local main = pd:FindFirstChild("Main"); if not main then return end
+        DashData.coins  = main:FindFirstChild("Coins") and math.floor(main.Coins.Value) or 0
+        DashData.wins   = main:FindFirstChild("Wins") and main.Wins.Value or 0
+        DashData.losses = main:FindFirstChild("Losses") and main.Losses.Value or 0
+        DashData.streak = main:FindFirstChild("Streak") and main.Streak.Value or 0
+        DashData.slot   = pd:FindFirstChild("CurrentSlot") and pd.CurrentSlot.Value or 1
+        local slot = pd.Slots:FindFirstChild(tostring(DashData.slot))
+        if slot and slot:FindFirstChild("Stats") and slot:FindFirstChild("MinStats") and slot:FindFirstChild("MaxStats") then
+            if _G.CalculateOverallRating then
+                DashData.ovr = _G.CalculateOverallRating(slot.Stats, slot.MinStats, slot.MaxStats)
+            else
+                local total, count = 0, 0
+                for _, s in pairs(slot.Stats:GetChildren()) do
+                    if s:IsA("NumberValue") or s:IsA("IntValue") then total = total + s.Value; count = count + 1 end
+                end
+                DashData.ovr = count > 0 and math.floor(total / count) or 0
+            end
+        end
+        DashData.greens = Flags.ScoreTracker
+    end)
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- BACKGROUND LOOPS
+-- ═══════════════════════════════════════════════════════════════
+
+-- Auto Farm Loop
+task.spawn(function()
+    local lastGuardFire, lastReachFire = 0, 0
+    while true do
+        task.wait()
+        if not Flags.AutoFarm then task.wait(0.1); continue end
+        local c = Player.Character; if not c then continue end
+        local root = getRoot(c); if not root then continue end
+        if not c:GetAttribute("InGame") or c:GetAttribute("InGame") == "" then continue end
+        if ShotInProgress then continue end
+        local hasBall = c:FindFirstChild("Ball") ~= nil
+        if hasBall then
+            local action = c:GetAttribute("Action") or ""
+            if action == "" or action == "Dribbling" or action == "Idle" then
+                local spot = SavedSpots[Flags.FarmSpot]
+                if spot then
+                    if Flags.FastTP then fastTP(spot.position, true) end
+                    task.wait(0.15); executeShot(spot.holdTime); task.wait(2)
+                end
+            end
+        elseif not ReboundDebounce then
+            local looseBall = getLooseBall()
+            if looseBall then
+                if Flags.FastTP then fastTP(looseBall.Position + Vector3.new(0, 3, 0), false) end
+                if tick() - lastReachFire > 0.3 then pcall(function() ActionRemote:FireServer({Action="Reach", Reach=true}) end); lastReachFire = tick() end
+            else
+                local handler = getNearestBallHandler()
+                if handler and handler.Character then
+                    local tr = getRoot(handler.Character)
+                    if tr and Flags.FastTP then
+                        local hoopPos = getHoopPosition()
+                        if hoopPos then
+                            local guardPos = tr.Position + (hoopPos - tr.Position).Unit * Flags.GuardDistance
+                            local goalCF = CFrame.new(guardPos, Vector3.new(tr.Position.X, guardPos.Y, tr.Position.Z))
+                            root.CFrame = Flags.GuardSpeed >= 1 and goalCF or root.CFrame:Lerp(goalCF, Flags.GuardSpeed)
+                            root.AssemblyLinearVelocity = Vector3.zero
+                        end
+                    end
+                    if tick() - lastGuardFire > 0.5 then
+                        pcall(function() ActionRemote:FireServer({Action="Guard", Guard=true}) end)
+                        c:SetAttribute("Guarding", handler.Name); lastGuardFire = tick()
+                    end
+                end
+            end
+        end
+    end
+end)
+
+-- Auto Match Queue Loop
+task.spawn(function()
+    while true do
+        task.wait(3)
+        if not Flags.AutoMatch then continue end
+        local c = Player.Character; if not c then continue end
+        local inGame = c:GetAttribute("InGame")
+        local inQueue = c:GetAttribute("InQueue")
+        if (not inGame or inGame == "") and not inQueue then joinQueue1v1() end
+    end
+end)
+
+-- 1v1 Only Enforcement
+task.spawn(function()
+    while true do
+        task.wait(2)
+        if not Flags.Only1v1 then continue end
+        local c = Player.Character; if not c then continue end
+        local inGame = c:GetAttribute("InGame")
+        if inGame and inGame ~= "" then
+            task.wait(3)
+            local playerCount = countPlayersInGame()
+            if playerCount > 2 then
+                Library:Notify({ Title = "1v1 Only", Description = "Detected " .. playerCount .. " players — leaving.", Duration = 4 })
+                pcall(function() Remotes.Server.EndGame:FireServer() end)
+                leaveQueue()
+                local timeout = tick() + 15
+                repeat task.wait(0.5) until not c.Parent or not c:GetAttribute("InGame") or c:GetAttribute("InGame") == "" or tick() > timeout
+                task.wait(1)
+                c = Player.Character
+                if c then local root = getRoot(c); if root then root.CFrame = CFrame.new(SPOT_1V1 + Vector3.new(0, 3, 0)) end end
+            end
+        end
+    end
+end)
+
+-- Auto Steal
+task.spawn(function()
+    while true do
+        task.wait(0.6)
+        if not Flags.AutoSteal then continue end
+        local c = Player.Character
+        if c and not c:FindFirstChild("Ball") and getNearestBallHandler() then
+            pcall(function() ActionRemote:FireServer({Action="Reach", Reach=true}) end)
+        end
+    end
+end)
+
+-- Auto Dunk
+task.spawn(function()
+    while true do
+        task.wait(0.2)
+        if not Flags.AutoDunk then continue end
+        local c = Player.Character
+        if c and c:FindFirstChild("Ball") then
+            local a = c:GetAttribute("Action") or ""
+            if a == "" or a == "Dribbling" then
+                local hoopPos = getHoopPosition(); local root = getRoot(c)
+                if hoopPos and root and (root.Position - hoopPos).Magnitude < 12 then
+                    pcall(function() ActionRemote:FireServer({Type="Shoot", Shoot=true, HoldingQ=false, HoldingL1=false, DoubleTap=true}) end)
+                    task.wait(0.5)
+                    pcall(function() ActionRemote:FireServer({Type="Shoot", Shoot=false}) end)
+                    task.wait(1.5)
+                end
+            end
+        end
+    end
+end)
+
+-- NoMeter
+task.spawn(function()
+    while true do
+        task.wait(5)
+        if Flags.NoMeter then pcall(function() local pd = GetDataRemote:InvokeServer(); if pd and pd.Misc and pd.Misc.NoMeter ~= true then ReplicatedStorage.NoMeter:FireServer() end end) end
+    end
+end)
+
+-- Anti-Stun
+task.spawn(function()
+    while true do
+        task.wait(0.1)
+        if not Flags.AntiStun then continue end
+        local c = Player.Character; if not c then continue end
+        for _, attr in pairs({"Stunned","PushStun","SecondPushStun","RecentlyPushed","Pushed"}) do
+            if c:GetAttribute(attr) then c:SetAttribute(attr, false) end
+        end
+    end
+end)
+
+-- Auto Badge Upgrade (no spam — single notify at end)
+task.spawn(function()
+    while true do
+        task.wait(0.7)
+        if not Flags.AutoBadgeUpgrade then continue end
+        local badge = Flags.SelectedBadge
+        if not badge or badge == "" then continue end
+        local category = BADGE_TO_CATEGORY[badge]
+        if not category then continue end
+        local points = getBadgePointsForCategory(category)
+        if points <= 0 then
+            Flags.AutoBadgeUpgrade = false
+            Library:Notify({ Title = "Badges", Description = "No " .. category .. " points left.", Duration = 3 })
+            continue
+        end
+        local data = GetDataRemote:InvokeServer()
+        if not data then continue end
+        local slot = data.Slots[tostring(data.CurrentSlot)]
+        if not slot or not slot.Badges or not slot.Badges[badge] then continue end
+        if slot.Badges[badge].CurrentTier >= slot.Badges[badge].MaxTier then
+            Flags.AutoBadgeUpgrade = false
+            Library:Notify({ Title = "Badges", Description = badge .. " maxed!", Duration = 3 })
+            continue
+        end
+        pcall(function() EditBadgeTierRemote:FireServer({Type = "Upgrade", BadgeName = badge}) end)
+        task.wait(0.5)
+    end
+end)
+
+-- Auto Attribute Upgrade
+task.spawn(function()
+    while true do
+        task.wait(0.7)
+        if not Flags.AutoAttrUpgrade then continue end
+        local category = Flags.SelectedAttrCategory
+        if not category then continue end
+        local attrNames = ATTR_CATEGORIES[category]
+        if not attrNames then continue end
+        local pd = Player:FindFirstChild("PlayerData"); if not pd then continue end
+        local slotFolder = pd.Slots:FindFirstChild(tostring(pd.CurrentSlot.Value)); if not slotFolder then continue end
+        local stats = slotFolder:FindFirstChild("Stats"); if not stats then continue end
+        local maxStats = slotFolder:FindFirstChild("MaxStats"); if not maxStats then continue end
+        local upgraded = false
+        for _, attrName in pairs(attrNames) do
+            local cur = stats:FindFirstChild(attrName)
+            local max = maxStats:FindFirstChild(attrName)
+            if cur and max and cur.Value < max.Value then
+                pcall(function()
+                    ReplicatedStorage.Remotes.Server:FindFirstChild("EditAttribute"):FireServer({
+                        Type = "Upgrade", AttributeName = attrName
+                    })
+                end)
+                upgraded = true
+                task.wait(0.3)
+                break
+            end
+        end
+        if not upgraded then
+            Flags.AutoAttrUpgrade = false
+            Library:Notify({ Title = "Attributes", Description = category .. " attributes maxed!", Duration = 3 })
+        end
+    end
+end)
+
+-- Auto Save
+task.spawn(function() while true do task.wait(5); if Flags.AutoSaveConfig then saveConfig(true) end end end)
+
+-- ═══ CONNECTIONS ═══
+UserInputService.InputBegan:Connect(function(input, gpe)
+    if gpe or input.KeyCode ~= Enum.KeyCode.E or not Flags.AutoTime or ShotInProgress then return end
+    local c = Player.Character; if not c or not c:FindFirstChild("Ball") then return end
+    executeShot()
+end)
+
+local guardingState = false
+RunService.Stepped:Connect(function()
+    if not Flags.AutoGuard then
+        if guardingState then pcall(function() ActionRemote:FireServer({Action="Guard", Guard=false}) end); guardingState = false end
+        return
+    end
+    local c = Player.Character; if not c then return end
+    local root = getRoot(c); if not root then return end
+    local target = getNearestBallHandler()
+    if target and target.Character then
+        local tr = getRoot(target.Character)
+        if tr then
+            if not guardingState then pcall(function() ActionRemote:FireServer({Action="Guard", Guard=true}) end); guardingState = true end
+            c:SetAttribute("Guarding", target.Name)
+            local hoopPos = getHoopPosition()
+            if hoopPos then
+                local guardPos = tr.Position + (hoopPos - tr.Position).Unit * Flags.GuardDistance
+                local goalCF = CFrame.new(guardPos, Vector3.new(tr.Position.X, guardPos.Y, tr.Position.Z))
+                root.CFrame = Flags.GuardSpeed >= 1 and goalCF or root.CFrame:Lerp(goalCF, Flags.GuardSpeed)
+                root.AssemblyLinearVelocity = Vector3.zero
+            end
+        end
+    else
+        if guardingState then pcall(function() ActionRemote:FireServer({Action="Guard", Guard=false}) end); guardingState = false; c:SetAttribute("Guarding", "") end
+    end
+end)
+
+RunService.Stepped:Connect(function()
+    local c = Player.Character; if not c then return end
+    if Flags.SpeedEnabled then local hum = getHum(c); if hum and hum.MoveDirection.Magnitude > 0 then hum.WalkSpeed = 16 * Flags.SpeedMult end end
+    if Flags.Noclip then for _, part in pairs(c:GetDescendants()) do if part:IsA("BasePart") then part.CanCollide = false end end end
+end)
+
+RunService.Heartbeat:Connect(function()
+    local c = Player.Character; if not c then return end
+    if Flags.InfiniteStamina then c:SetAttribute("Stamina", 100) end
+end)
+
+-- TP Anti-Contest setup
+local function setupTPForChar(char)
+    local root = char:WaitForChild("HumanoidRootPart", 5); if not root then return end
+    local savedCF, isTPd = nil, false
+    local function restore()
+        if not isTPd then return end; isTPd = false
+        root.Anchored = false; if not Flags.TPStayUp then root.CFrame = savedCF end; savedCF = nil
+    end
+    char:GetAttributeChangedSignal("Action"):Connect(function()
+        if not Flags.TPAntiContest then return end
+        local a = char:GetAttribute("Action") or ""
+        if (a == "Shooting" or a == "Dunking") and not isTPd then savedCF = root.CFrame; root.Anchored = true; root.CFrame = savedCF + Vector3.new(0, Flags.TPHeight, 0); isTPd = true
+        elseif (a == "" or a == "Dribbling" or a == "Idle") and isTPd then restore() end
+    end)
+    char:GetAttributeChangedSignal("Released"):Connect(function()
+        if Flags.TPAntiContest and char:GetAttribute("Released") and isTPd then task.delay(0.15, restore) end
+    end)
+    local hum = getHum(char); if hum then hum.Died:Once(function() pcall(restore) end) end
+end
+
+-- Disable rendering
+local function toggleRendering(disable)
+    if disable then
+        RunService:Set3dRenderingEnabled(false)
+    else
+        RunService:Set3dRenderingEnabled(true)
+    end
+end
+
+-- ═══════════════════════════════════════════════════════════════
+-- WINDOW
+-- ═══════════════════════════════════════════════════════════════
+local Window = Library:CreateWindow({
+    Title         = "Gym Basketball OP v8",
+    Footer        = "Obsidian | Dashboard + Farm + Badges + 1v1 | RCtrl",
+    Size          = UDim2.fromOffset(630, 510),
+    Center        = true, AutoShow = true,
+    ToggleKeybind = Enum.KeyCode.RightControl,
+})
+
+-- ═══════════════════════════════════════════════════════════════
+-- TAB 1: DASHBOARD
+-- ═══════════════════════════════════════════════════════════════
+local DashTab = Window:AddTab({ Name = "Dashboard", Icon = "layout-dashboard" })
+local DashL   = DashTab:AddLeftGroupbox("Player Stats")
+local DashR   = DashTab:AddRightGroupbox("Session Stats")
+
+local DashLabels = {}
+
+DashL:AddLabel("Loading stats...")
+DashR:AddLabel("Loading session...")
+
+local function updateDashboard()
+    refreshDashData()
+    if DashLabels.coins then
+        DashLabels.coins:SetText("Coins: " .. tostring(DashData.coins))
+        DashLabels.ovr:SetText("Overall: " .. tostring(DashData.ovr))
+        DashLabels.wins:SetText("Wins: " .. tostring(DashData.wins) .. " | Losses: " .. tostring(DashData.losses))
+        DashLabels.streak:SetText("Win Streak: " .. tostring(DashData.streak))
+        DashLabels.greens:SetText("Greens This Session: " .. tostring(Flags.ScoreTracker))
+        local totalShots = 0; for _, v in pairs(ShotCounts) do totalShots = totalShots + v end
+        DashLabels.shots:SetText("Total Shots: " .. tostring(totalShots))
+        DashLabels.slot:SetText("Active Slot: " .. tostring(DashData.slot))
+    end
+end
+
+task.spawn(function()
+    task.wait(2)
+    refreshDashData()
+
+    for _, child in pairs(DashL.Container:GetChildren()) do if child:IsA("TextLabel") then child:Destroy() end end
+    for _, child in pairs(DashR.Container:GetChildren()) do if child:IsA("TextLabel") then child:Destroy() end end
+
+    DashLabels.coins  = DashL:AddLabel("Coins: " .. tostring(DashData.coins))
+    DashLabels.ovr    = DashL:AddLabel("Overall: " .. tostring(DashData.ovr))
+    DashLabels.wins   = DashL:AddLabel("Wins: " .. tostring(DashData.wins) .. " | Losses: " .. tostring(DashData.losses))
+    DashLabels.streak = DashL:AddLabel("Win Streak: " .. tostring(DashData.streak))
+    DashLabels.slot   = DashL:AddLabel("Active Slot: " .. tostring(DashData.slot))
+
+    DashLabels.greens = DashR:AddLabel("Greens This Session: " .. tostring(Flags.ScoreTracker))
+    DashLabels.shots  = DashR:AddLabel("Total Shots: 0")
+
+    DashR:AddButton({ Text = "Refresh Stats", Func = updateDashboard })
+
+    while true do task.wait(10); updateDashboard() end
+end)
+
+-- ═══════════════════════════════════════════════════════════════
+-- TAB 2: AUTO FARM (merged with anti-contest)
+-- ═══════════════════════════════════════════════════════════════
+local FarmTab = Window:AddTab({ Name = "Auto Farm", Icon = "sprout" })
+local FarmL   = FarmTab:AddLeftGroupbox("Auto Farm")
+local FarmR   = FarmTab:AddRightGroupbox("Defense & Anti-Contest")
+
+FarmL:AddToggle("AutoFarm", { Text = "Auto Farm", Default = Flags.AutoFarm, Callback = function(v) Flags.AutoFarm = v end })
+FarmL:AddDropdown("FarmSpot", { Text = "Shooting Spot", Values = {"3-Pointer","Mid-Range"}, Default = Flags.FarmSpot, Callback = function(v) Flags.FarmSpot = v end })
+FarmL:AddSlider("FarmHoldTime", { Text = "Shot Hold Time", Min = 0.15, Max = 2.0, Default = Flags.FarmHoldTime, Increment = 0.01, Suffix = "s", Callback = function(v) Flags.FarmHoldTime = v; if SavedSpots[Flags.FarmSpot] then SavedSpots[Flags.FarmSpot].holdTime = v end end })
+FarmL:AddToggle("FastTP", { Text = "Fast TP (Instant CFrame)", Default = Flags.FastTP, Callback = function(v) Flags.FastTP = v end })
+FarmL:AddButton({ Text = "Save Pos as 3PT", Func = function() local root = getRoot(Player.Character); if root then SavedSpots["3-Pointer"].position = root.Position; Library:Notify({Title="Saved",Description="3PT: "..tostring(root.Position),Duration=3}) end end })
+FarmL:AddButton({ Text = "Save Pos as Mid-Range", Func = function() local root = getRoot(Player.Character); if root then SavedSpots["Mid-Range"].position = root.Position; Library:Notify({Title="Saved",Description="MID: "..tostring(root.Position),Duration=3}) end end })
+
+FarmL:AddDivider()
+FarmL:AddToggle("DisableRendering", { Text = "Disable 3D Rendering", Default = false, Tooltip = "Turns off 3D rendering for max performance while farming.", Callback = function(v) Flags.DisableRendering = v; toggleRendering(v) end })
+
+FarmR:AddToggle("TPAntiContest", { Text = "TP-Up When Shooting", Default = Flags.TPAntiContest, Callback = function(v)
+    Flags.TPAntiContest = v
+    if v and Player.Character then setupTPForChar(Player.Character) end
+    if not v and Player.Character then local r = getRoot(Player.Character); if r then r.Anchored = false end end
+end })
+FarmR:AddSlider("TPHeight", { Text = "TP Height", Min = 5, Max = 45, Default = Flags.TPHeight, Suffix = " studs", Callback = function(v) Flags.TPHeight = v end })
+FarmR:AddToggle("TPStayUp", { Text = "Stay Up After Shot", Default = Flags.TPStayUp, Callback = function(v) Flags.TPStayUp = v end })
+FarmR:AddDivider()
+FarmR:AddToggle("AutoGuard", { Text = "Auto Guard", Default = Flags.AutoGuard, Callback = function(v) Flags.AutoGuard = v end })
+FarmR:AddSlider("GuardDistance", { Text = "Guard Distance", Min = 0.5, Max = 10, Default = Flags.GuardDistance, Increment = 0.5, Suffix = " studs", Callback = function(v) Flags.GuardDistance = v end })
+FarmR:AddSlider("GuardSpeed", { Text = "Guard Lerp", Min = 0.1, Max = 1, Default = Flags.GuardSpeed, Increment = 0.1, Callback = function(v) Flags.GuardSpeed = v end })
+FarmR:AddToggle("AutoSteal", { Text = "Auto Steal", Default = Flags.AutoSteal, Callback = function(v) Flags.AutoSteal = v end })
+FarmR:AddToggle("AntiStun", { Text = "Anti Stun", Default = Flags.AntiStun, Callback = function(v) Flags.AntiStun = v end })
+
+-- ═══════════════════════════════════════════════════════════════
+-- TAB 3: SHOOTING
+-- ═══════════════════════════════════════════════════════════════
+local ShootTab = Window:AddTab({ Name = "Shooting", Icon = "zap" })
+local ShootL   = ShootTab:AddLeftGroupbox("Auto Green")
+local ShootR   = ShootTab:AddRightGroupbox("Extras")
+
+ShootL:AddToggle("AutoTime", { Text = "Auto Time (Hold E)", Default = Flags.AutoTime, Callback = function(v) Flags.AutoTime = v end })
+ShootL:AddToggle("SmartAI", { Text = "Smart AI Timing", Default = Flags.SmartAI, Callback = function(v) Flags.SmartAI = v end })
+ShootL:AddSlider("AdjustStep", { Text = "Adjust Step", Min = 0.01, Max = 0.20, Default = Flags.AdjustStep, Increment = 0.01, Suffix = "s", Callback = function(v) Flags.AdjustStep = v end })
+ShootL:AddSlider("StartHoldTime", { Text = "Starting Hold", Min = 0.15, Max = 2.0, Default = Flags.StartHoldTime, Increment = 0.01, Suffix = "s", Callback = function(v) Flags.StartHoldTime = v end })
+ShootL:AddButton({ Text = "Reset Timings", Func = function() for st in pairs(HoldTimes) do HoldTimes[st] = Flags.StartHoldTime end; ShotCounts = {}; Library:Notify({Title="Reset",Description="Timings → "..string.format("%.2f",Flags.StartHoldTime).."s",Duration=3}) end })
+ShootL:AddButton({ Text = "Unstick Character", Func = unstickChar })
+
+ShootR:AddToggle("ShotFeedbackHUD", { Text = "Shot Feedback HUD", Default = Flags.ShotFeedbackHUD, Callback = function(v) Flags.ShotFeedbackHUD = v; if v then createFeedbackHUD() else destroyFeedbackHUD() end end })
+ShootR:AddToggle("NoMeter", { Text = "NoMeter", Default = Flags.NoMeter, Callback = function(v) Flags.NoMeter = v end })
+ShootR:AddToggle("AutoDunk", { Text = "Auto Dunk", Default = Flags.AutoDunk, Callback = function(v) Flags.AutoDunk = v end })
+
+-- ═══════════════════════════════════════════════════════════════
+-- TAB 4: GAME & MATCHMAKING
+-- ═══════════════════════════════════════════════════════════════
+local GameTab = Window:AddTab({ Name = "Game", Icon = "gamepad-2" })
+local GameL   = GameTab:AddLeftGroupbox("Matchmaking")
+local GameR   = GameTab:AddRightGroupbox("Movement")
+
+GameL:AddToggle("AutoMatch", { Text = "Auto Queue 1v1", Default = Flags.AutoMatch, Callback = function(v) Flags.AutoMatch = v end })
+GameL:AddToggle("Only1v1", { Text = "1v1 Only (auto-leave)", Default = Flags.Only1v1, Callback = function(v) Flags.Only1v1 = v end })
+GameL:AddButton({ Text = "Queue 1v1 Now", Func = function() joinQueue1v1(); Library:Notify({Title="Queue",Description="Queued 1v1.",Duration=2}) end })
+GameL:AddButton({ Text = "Leave Queue", Func = function() leaveQueue(); Library:Notify({Title="Queue",Description="Left.",Duration=2}) end })
+GameL:AddButton({ Text = "Force Start", Func = function() pcall(function() Remotes.Server.Start:FireServer() end) end })
+
+GameL:AddDivider()
+GameL:AddButton({ Text = "Auto Rejoin Lobby", Func = function()
+    task.spawn(function()
+        Library:Notify({Title="Rejoin",Description="Teleporting to lobby...",Duration=3})
+        TeleportService:Teleport(QUICK_PLAY_PLACE, Player)
+    end)
+end })
+GameL:AddButton({ Text = "Server Hop", Func = function()
+    local ok, servers = pcall(function() return HttpService:JSONDecode(game:HttpGet("https://games.roblox.com/v1/games/" .. game.PlaceId .. "/servers/Public?sortOrder=Asc&limit=25")) end)
+    if ok and servers and servers.data then for _, s in pairs(servers.data) do if s.id ~= game.JobId and s.playing < s.maxPlayers then TeleportService:TeleportToPlaceInstance(game.PlaceId, s.id); return end end end
+    Library:Notify({Title="Hop",Description="No open server.",Duration=3})
+end })
+
+GameR:AddToggle("SpeedEnabled", { Text = "Speed Mod", Default = Flags.SpeedEnabled, Callback = function(v) Flags.SpeedEnabled = v end })
+GameR:AddSlider("SpeedMult", { Text = "Speed Mult", Min = 1, Max = 6, Default = Flags.SpeedMult, Increment = 0.5, Suffix = "x", Callback = function(v) Flags.SpeedMult = v end })
+GameR:AddToggle("InfiniteStamina", { Text = "Infinite Stamina", Default = Flags.InfiniteStamina, Callback = function(v) Flags.InfiniteStamina = v end })
+GameR:AddToggle("Noclip", { Text = "Noclip", Default = Flags.Noclip, Callback = function(v) Flags.Noclip = v end })
+
+-- ═══════════════════════════════════════════════════════════════
+-- TAB 5: BADGES (organized by category)
+-- ═══════════════════════════════════════════════════════════════
+local BadgeTab = Window:AddTab({ Name = "Badges", Icon = "award" })
+local BadgeL   = BadgeTab:AddLeftGroupbox("Upgrade Badges")
+local BadgeR   = BadgeTab:AddRightGroupbox("Badge Info")
+
+task.spawn(function() task.wait(1.5); refreshBadgeData() end)
+
+local BadgeCatDropdown = BadgeL:AddDropdown("BadgeCategory", {
+    Text = "Category", Values = {"All","Defending","Finishing","Playmaking","Shooting"}, Default = "All",
+    Callback = function(v)
+        Flags.SelectedBadgeCategory = v
+        local badges = getUpgradeableBadges(v)
+        if #badges == 0 then badges = {"(none)"} end
+        BadgeSelectorDropdown:SetValues(badges)
+    end,
+})
+
+BadgeSelectorDropdown = BadgeL:AddDropdown("SelectedBadge", {
+    Text = "Select Badge", Values = getUpgradeableBadges("All"), Default = "",
+    Callback = function(v) if v ~= "(none)" then Flags.SelectedBadge = v end end,
+})
+
+BadgeL:AddToggle("AutoBadgeUpgrade", { Text = "Auto Upgrade Selected", Default = false, Callback = function(v) Flags.AutoBadgeUpgrade = v end })
+
+BadgeL:AddButton({ Text = "Upgrade Once", Func = function()
+    local b = Flags.SelectedBadge; if not b or b == "" then return end
+    pcall(function() EditBadgeTierRemote:FireServer({Type="Upgrade", BadgeName=b}) end)
+    task.wait(0.3); refreshBadgeData()
+    Library:Notify({Title="Badge",Description="Upgraded "..b,Duration=2})
+end })
+
+BadgeL:AddButton({ Text = "Upgrade ALL Available", Func = function()
+    task.spawn(function()
+        refreshBadgeData()
+        local count = 0
+        for _, badge in pairs(CachedBadgeList) do
+            if badge.maxTier > 0 and badge.currentTier < badge.maxTier then
+                local points = getBadgePointsForCategory(badge.category)
+                while points > 0 and badge.currentTier < badge.maxTier do
+                    pcall(function() EditBadgeTierRemote:FireServer({Type="Upgrade", BadgeName=badge.name}) end)
+                    count = count + 1; task.wait(0.5)
+                    local data = GetDataRemote:InvokeServer()
+                    if data then
+                        local slot = data.Slots[tostring(data.CurrentSlot)]
+                        if slot and slot.Badges[badge.name] then badge.currentTier = slot.Badges[badge.name].CurrentTier end
+                        if slot and slot.BadgePoints[badge.category] then points = slot.BadgePoints[badge.category].BadgePoints else points = 0 end
+                    else break end
+                end
+            end
+        end
+        refreshBadgeData()
+        BadgeSelectorDropdown:SetValues(getUpgradeableBadges(Flags.SelectedBadgeCategory))
+        Library:Notify({Title="Badges",Description=count.." upgrades applied.",Duration=4})
+    end)
+end })
+
+BadgeL:AddButton({ Text = "Refresh List", Func = function()
     refreshBadgeData()
-    if BadgeSelectorDropdown then BadgeSelectorDropdown:SetValues(getUpgradeableBadges(Flags.SelectedBadgeCategory)) end
+    BadgeSelectorDropdown:SetValues(getUpgradeableBadges(Flags.SelectedBadgeCategory))
     Library:Notify({Title="Badges",Description=#getUpgradeableBadges("All").." upgradeable.",Duration=2})
 end })
 
@@ -17,54 +1035,23 @@ BadgeR:AddButton({ Text = "Show Badge Points", Func = function()
 end })
 
 -- ═══════════════════════════════════════════════════════════════
--- TAB 6: ATTRIBUTES (with picker)
+-- TAB 6: ATTRIBUTES
 -- ═══════════════════════════════════════════════════════════════
 local AttrTab = Window:AddTab({ Name = "Attributes", Icon = "bar-chart-3" })
 local AttrL   = AttrTab:AddLeftGroupbox("Auto Upgrade Attributes")
 local AttrR   = AttrTab:AddRightGroupbox("Current Attributes")
 
-local AttrPickerDropdown
-
 AttrL:AddDropdown("AttrCategory", {
     Text = "Category", Values = {"Shooting","Finishing","Playmaking","Defending","Physical"}, Default = "Shooting",
-    Callback = function(v)
-        Flags.SelectedAttrCategory = v
-        Flags.SelectedAttr = ""
-        if AttrPickerDropdown then
-            AttrPickerDropdown:SetValues(getAttrsForCategory(v))
-        end
-    end,
-})
-
-AttrPickerDropdown = AttrL:AddDropdown("SelectedAttr", {
-    Text = "Pick Attribute", Values = getAttrsForCategory("Shooting"), Default = "",
-    Tooltip = "Pick a specific attribute to upgrade, or leave blank to upgrade all in the category.",
-    Callback = function(v)
-        if v then
-            local cleanName = v:match("^(.-)%s*%[") or v
-            Flags.SelectedAttr = cleanName
-        end
-    end,
+    Callback = function(v) Flags.SelectedAttrCategory = v end,
 })
 
 AttrL:AddToggle("AutoAttrUpgrade", {
-    Text = "Auto Upgrade",
+    Text = "Auto Upgrade Category",
     Default = false,
-    Tooltip = "Upgrades the selected attribute (or all in category) until maxed.",
+    Tooltip = "Upgrades all attributes in the selected category until maxed.",
     Callback = function(v) Flags.AutoAttrUpgrade = v end,
 })
-
-AttrL:AddButton({ Text = "Upgrade Once", Func = function()
-    local attr = Flags.SelectedAttr
-    if not attr or attr == "" then
-        Library:Notify({Title="Attributes",Description="Pick an attribute first.",Duration=2})
-        return
-    end
-    fireAttrUpgrade(attr)
-    task.wait(0.3)
-    if AttrPickerDropdown then AttrPickerDropdown:SetValues(getAttrsForCategory(Flags.SelectedAttrCategory)) end
-    Library:Notify({Title="Attributes",Description="Upgraded " .. attr,Duration=2})
-end })
 
 AttrL:AddButton({ Text = "Upgrade All Categories", Func = function()
     task.spawn(function()
@@ -79,7 +1066,9 @@ AttrL:AddButton({ Text = "Upgrade All Categories", Func = function()
                 local max = maxStats:FindFirstChild(attrName)
                 if cur and max then
                     while cur.Value < max.Value do
-                        fireAttrUpgrade(attrName)
+                        pcall(function()
+                            ReplicatedStorage.Remotes.Server:FindFirstChild("EditAttribute"):FireServer({Type="Upgrade", AttributeName=attrName})
+                        end)
                         count = count + 1; task.wait(0.3)
                         if cur.Value >= max.Value then break end
                     end
@@ -89,8 +1078,6 @@ AttrL:AddButton({ Text = "Upgrade All Categories", Func = function()
         Library:Notify({Title="Attributes",Description=count.." upgrades applied.",Duration=4})
     end)
 end })
-
-AttrR:AddLabel("Remote: " .. AttrUpgradeMethod)
 
 AttrR:AddButton({ Text = "Show Current Stats", Func = function()
     task.spawn(function()
@@ -108,23 +1095,6 @@ AttrR:AddButton({ Text = "Show Current Stats", Func = function()
         table.sort(lines)
         Library:Notify({Title="Attributes",Description=table.concat(lines, "\n"),Duration=10})
     end)
-end })
-
-AttrR:AddButton({ Text = "List All Server Remotes", Func = function()
-    task.spawn(function()
-        local lines = {}
-        for _, child in pairs(ServerRemotes:GetChildren()) do
-            table.insert(lines, child.Name .. " (" .. child.ClassName .. ")")
-        end
-        table.sort(lines)
-        Library:Notify({Title="Server Remotes",Description=table.concat(lines, "\n"),Duration=10})
-    end)
-end })
-
-AttrR:AddButton({ Text = "Refresh Attr List", Func = function()
-    if AttrPickerDropdown then AttrPickerDropdown:SetValues(getAttrsForCategory(Flags.SelectedAttrCategory)) end
-    discoverAttrRemote()
-    Library:Notify({Title="Attributes",Description="Refreshed. Remote: " .. AttrUpgradeMethod,Duration=3})
 end })
 
 -- ═══════════════════════════════════════════════════════════════
@@ -153,18 +1123,25 @@ SetL:AddToggle("AutoSaveConfig", { Text = "Auto-Save", Default = Flags.AutoSaveC
 
 SetR:AddToggle("AntiAFK", { Text = "Anti-AFK", Default = Flags.AntiAFK, Callback = function(v) Flags.AntiAFK = v end })
 SetR:AddToggle("AutoExecuteOnTP", { Text = "Auto Execute on TP", Default = Flags.AutoExecuteOnTP, Callback = function(v) Flags.AutoExecuteOnTP = v end })
-SetR:AddInput("AutoExecStr", { Text = "Script URL (for re-execute)", Default = Flags.AutoExecuteString, Callback = function(v) if v and v ~= "" then Flags.AutoExecuteString = v end end })
+SetR:AddInput("AutoExecStr", { Text = "Script URL", Default = Flags.AutoExecuteString, Callback = function(v) if v and v ~= "" then Flags.AutoExecuteString = v end end })
 
 -- ═══ GLOBAL EVENTS ═══
 local VirtualUser = game:GetService("VirtualUser")
 Player.Idled:Connect(function() if Flags.AntiAFK then VirtualUser:CaptureController(); VirtualUser:ClickButton2(Vector2.new(0,0)) end end)
 Player.CharacterAdded:Connect(function(char) task.wait(1.5); if Flags.TPAntiContest then setupTPForChar(char) end end)
 
-queueScriptOnTP()
-Player.OnTeleport:Connect(queueScriptOnTP)
+-- Queue on teleport
+local function TriggerQueue()
+    if Flags.AutoExecuteOnTP and Flags.AutoExecuteString ~= "" then
+        local qot = queue_on_teleport or (syn and syn.queue_on_teleport) or (fluxus and fluxus.queue_on_teleport) or (getgenv and getgenv().queue_on_teleport)
+        if qot then pcall(function() qot(Flags.AutoExecuteString) end) end
+    end
+end
+TriggerQueue()
+Player.OnTeleport:Connect(TriggerQueue)
 
 -- ═══ INIT ═══
 task.spawn(function()
     task.wait(2); unstickChar(); refreshBadgeData()
-    Library:Notify({ Title = "Gym Basketball OP v8.1", Description = "Loaded! Attr remote: " .. AttrUpgradeMethod .. ". RCtrl = toggle.", Duration = 6 })
+    Library:Notify({ Title = "Gym Basketball OP v8", Description = "Loaded! Dashboard + Farm + Badges + Attributes + 1v1. RCtrl = toggle.", Duration = 5 })
 end)
