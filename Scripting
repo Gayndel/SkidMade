@@ -48,6 +48,10 @@ local Flags = {
     Noclip          = false,
     InfiniteStamina = false,
 
+    -- ESP
+    BallESP         = false,
+    PlayerESP       = false,
+
     -- Farm extras
     AutoStart       = false,
     AutoBallPickup  = false,
@@ -58,8 +62,16 @@ local Flags = {
     AntiAnkleBreak  = false,
     AntiOOB         = false,
 
+    -- Spoofer
+    SpoofName       = false,
+    SpoofedName     = "Solo on top",
+    SpoofOVR        = false,
+    SpoofedOVR      = 990,
+
     -- Auto Match
     AutoMatch       = false,
+    MatchPlaceId    = 18517963950,  -- Gym place
+    LobbyPlaceId    = 18517963950,  -- Matchmaking Lobby
 
     -- Config
     AutoLoad        = false,
@@ -383,6 +395,9 @@ end
 
 local function runAutoFarm()
     task.spawn(function()
+        local lastGuardFire = 0
+        local lastReachFire = 0
+        
         while Flags.AutoFarm do
             local c = Player.Character
             if not c then task.wait(0.5); continue end
@@ -421,8 +436,11 @@ local function runAutoFarm()
                     if Flags.FastTP then
                         fastTP(looseBall.Position + Vector3.new(0, 3, 0), false)
                     end
-                    pcall(function() ActionRemote:FireServer({Action="Reach", Reach=true}) end)
-                    task.wait(0.3)
+                    -- Use non-yielding debounce for reaching
+                    if tick() - lastReachFire > 0.3 then
+                        pcall(function() ActionRemote:FireServer({Action="Reach", Reach=true}) end)
+                        lastReachFire = tick()
+                    end
                 else
                     local ballHandler = getNearestBallHandler()
                     if ballHandler and ballHandler.Character then
@@ -431,25 +449,78 @@ local function runAutoFarm()
                             local hoopPos = getHoopPosition()
                             if hoopPos then
                                 local dirToHoop = (hoopPos - tr.Position).Unit
-                                local guardPos = tr.Position + dirToHoop * 3
-                                fastTP(guardPos, false)
+                                -- Reduced from 3 studs to 1.5 for blatant tracking
+                                local guardPos = tr.Position + dirToHoop * 1.5 
+                                
+                                -- Glue to the player, maintaining their Y level to prevent flinging
+                                root.CFrame = CFrame.new(guardPos, Vector3.new(tr.Position.X, guardPos.Y, tr.Position.Z))
+                                root.AssemblyLinearVelocity = Vector3.zero 
                             else
-                                fastTP(tr.Position + Vector3.new(0, 0, 3), false)
+                                fastTP(tr.Position + Vector3.new(0, 0, 1.5), false)
                             end
                         end
-                        pcall(function() ActionRemote:FireServer({Action="Guard", Guard=true}) end)
-                        c:SetAttribute("Guarding", ballHandler.Name)
-                        task.wait(0.5)
-                    else
-                        task.wait(0.5)
+                        -- Use non-yielding debounce for guarding
+                        if tick() - lastGuardFire > 0.5 then
+                            pcall(function() ActionRemote:FireServer({Action="Guard", Guard=true}) end)
+                            c:SetAttribute("Guarding", ballHandler.Name)
+                            lastGuardFire = tick()
+                        end
                     end
                 end
             end
 
-            task.wait(0.1)
+            -- Changed from task.wait(0.1) to task.wait() for smooth, every-frame updates
+            task.wait() 
         end
     end)
 end
+
+-- ═══ ESP ═══
+local ESPObjects = {}
+local function removeESP(key)
+    if ESPObjects[key] then ESPObjects[key]:Destroy(); ESPObjects[key] = nil end
+end
+local function makeBox(adornee, fill, outline)
+    local b = Instance.new("SelectionBox")
+    b.Color3 = outline or Color3.fromRGB(255,255,0)
+    b.LineThickness = 0.05
+    b.SurfaceTransparency = 0.6
+    b.SurfaceColor3 = fill or Color3.fromRGB(255,200,0)
+    b.Adornee = adornee
+    b.Parent = workspace
+    return b
+end
+task.spawn(function()
+    while true do
+        task.wait(0.1)
+        if Flags.BallESP then
+            for _, obj in pairs(workspace:GetDescendants()) do
+                if obj.Name == "Ball" and obj:IsA("BasePart") then
+                    local key = "ball_" .. tostring(obj)
+                    if not ESPObjects[key] then
+                        ESPObjects[key] = makeBox(obj, Color3.fromRGB(255,140,0), Color3.fromRGB(255,80,0))
+                    end
+                end
+            end
+        end
+        if Flags.PlayerESP then
+            local myTeam = getMyTeam()
+            for _, p in pairs(Players:GetPlayers()) do
+                if p ~= Player and p.Character then
+                    local root = getRoot(p.Character)
+                    if root then
+                        local key = "plr_" .. p.UserId
+                        if not ESPObjects[key] then
+                            local col = getPlayerTeam(p) == myTeam
+                                and Color3.fromRGB(0,200,255) or Color3.fromRGB(255,60,60)
+                            ESPObjects[key] = makeBox(root, col, col)
+                        end
+                    end
+                end
+            end
+        end
+    end
+end)
 
 -- ═══ TP ANTI-CONTEST ═══
 local function setupTPForChar(char)
@@ -496,6 +567,43 @@ task.spawn(function()
             if c:GetAttribute("RecentlyPushed")  then c:SetAttribute("RecentlyPushed", false) end
             if c:GetAttribute("Pushed")          then c:SetAttribute("Pushed", false) end
         end
+    end
+end)
+
+-- ═══ SPOOFER ═══
+local function getBanner()
+    local c = Player.Character
+    return c and c:FindFirstChild("PlayerBanner")
+end
+local function applySpoofs()
+    local banner = getBanner()
+    if not banner then return end
+    local bg = banner:FindFirstChild("Background")
+    if not bg then return end
+    if Flags.SpoofName then
+        local lbl = bg:FindFirstChild("PlayerName")
+        if lbl and lbl:IsA("TextLabel") then lbl.Text = Flags.SpoofedName end
+    end
+    if Flags.SpoofOVR then
+        local ovr = bg:FindFirstChild("OvrBackground")
+        local lbl = ovr and ovr:FindFirstChild("OvrStroke") and ovr.OvrStroke:FindFirstChild("Overall")
+        if lbl and lbl:IsA("TextLabel") then
+            lbl.Text = tostring(Flags.SpoofedOVR)
+            local color = Flags.SpoofedOVR >= 91 and Color3.fromRGB(222,128,255)
+                       or Flags.SpoofedOVR >= 80 and Color3.fromRGB(255,219,128)
+                       or Flags.SpoofedOVR >= 70 and Color3.fromRGB(165,165,165)
+                       or Color3.fromRGB(105,73,52)
+            local bgStroke = bg:FindFirstChild("BackgroundStroke")
+            local ovrStroke = ovr and ovr:FindFirstChild("OvrStroke")
+            if bgStroke  then bgStroke.ImageColor3 = color end
+            if ovrStroke then ovrStroke.ImageColor3 = color end
+        end
+    end
+end
+task.spawn(function()
+    while true do
+        task.wait(0.3)
+        if Flags.SpoofName or Flags.SpoofOVR then applySpoofs() end
     end
 end)
 
@@ -712,40 +820,6 @@ ShootR:AddToggle("NoMeter", {
     end,
 })
 
-ShootR:AddToggle("AutoDunk", {
-    Text    = "Auto Dunk (force dunk near basket)",
-    Default = false,
-    Callback = function(v)
-        Flags.AutoDunk = v
-        if v then
-            task.spawn(function()
-                while Flags.AutoDunk do
-                    local c = Player.Character
-                    if c and c:FindFirstChild("Ball") then
-                        local a = c:GetAttribute("Action") or ""
-                        if a == "" or a == "Dribbling" then
-                            local hoopPos = getHoopPosition()
-                            local root = getRoot(c)
-                            if hoopPos and root and (root.Position - hoopPos).Magnitude < 12 then
-                                pcall(function()
-                                    ActionRemote:FireServer({
-                                        Type = "Shoot", Shoot = true,
-                                        HoldingQ = false, HoldingL1 = false, DoubleTap = true,
-                                    })
-                                end)
-                                task.wait(0.5)
-                                pcall(function() ActionRemote:FireServer({Type="Shoot", Shoot=false}) end)
-                                task.wait(1.5)
-                            end
-                        end
-                    end
-                    task.wait(0.2)
-                end
-            end)
-        end
-    end,
-})
-
 -- ═══════════════════════════════════════════════════════════════
 -- TAB: ANTI-CONTEST
 -- ═══════════════════════════════════════════════════════════════
@@ -787,12 +861,13 @@ ACL:AddToggle("TPStayUp", {
 ACR:AddToggle("AutoGuard", {
     Text    = "Auto Guard (follow in front of opponent)",
     Default = false,
-    Tooltip = "Fires Guard=true and positions you in front of the ball handler. No steal spam.",
+    Tooltip = "Fires Guard=true and sticks closely in front of the ball handler.",
     Callback = function(v)
         Flags.AutoGuard = v
         if v then
             local guarding = false
-            Conns.AutoGuard = RunService.Heartbeat:Connect(function()
+            -- Changed to Stepped so it fires before physics, removing stutter
+            Conns.AutoGuard = RunService.Stepped:Connect(function()
                 local c = Player.Character
                 if not c then return end
                 local root = getRoot(c)
@@ -809,8 +884,10 @@ ACR:AddToggle("AutoGuard", {
                         local hoopPos = getHoopPosition()
                         if hoopPos then
                             local dirToHoop = (hoopPos - tr.Position).Unit
-                            local guardPos = tr.Position + dirToHoop * 3
-                            root.CFrame = CFrame.new(guardPos, tr.Position)
+                            -- Lock on aggressively tight
+                            local guardPos = tr.Position + dirToHoop * 1.5
+                            root.CFrame = CFrame.new(guardPos, Vector3.new(tr.Position.X, guardPos.Y, tr.Position.Z))
+                            root.AssemblyLinearVelocity = Vector3.zero
                         end
                     end
                 else
@@ -956,45 +1033,28 @@ GameL:AddToggle("AutoStart", {
     end,
 })
 
-
 GameR:AddToggle("AutoMatch", {
-    Text    = "Auto Queue (1v1 Matchmaking)",
+    Text    = "Auto Join Match (teleport to Gym)",
     Default = false,
-    Tooltip = "Teleports to 1v1 spot and queues when in lobby.",
+    Tooltip = "When in lobby, auto-teleports to the Gym place to join matches.",
     Callback = function(v)
         Flags.AutoMatch = v
         if v then
             task.spawn(function()
                 while Flags.AutoMatch do
-                    local c = Player.Character
-                    if c then
-                        local inGame = c:GetAttribute("InGame")
-                        -- Only execute if player is waiting in the lobby
-                        if not inGame or inGame == "" then
-                            local root = getRoot(c)
-                            local spot = workspace:FindFirstChild("Spots") and workspace.Spots:FindFirstChild("1v1")
-                            
-                            if root and spot then
-                                -- Teleport slightly above the 1v1 spot
-                                root.CFrame = spot.CFrame + Vector3.new(0, 3, 0)
-                                task.wait(0.2)
-                                
-                                -- Fire Queue Remote
-                                pcall(function()
-                                    local q = ReplicatedStorage:FindFirstChild("Queue")
-                                    if q then
-                                        q:FireServer({ JoinQueue = true })
-                                    end
-                                end)
-                            end
-                        end
+                    if game.PlaceId == Flags.LobbyPlaceId then
+                        local TPS = game:GetService("TeleportService")
+                        pcall(function() TPS:Teleport(Flags.MatchPlaceId, Player) end)
                     end
-                    task.wait(3) -- Check every 3 seconds to avoid spamming network
+                    task.wait(5)
                 end
             end)
         end
     end,
 })
+
+GameR:AddLabel({ Text = "Lobby Place: " .. tostring(Flags.LobbyPlaceId), Size = 12 })
+GameR:AddLabel({ Text = "Gym Place: " .. tostring(Flags.MatchPlaceId), Size = 12 })
 
 GameL:AddButton({
     Text = "Claim Known Codes",
@@ -1025,43 +1085,66 @@ GameL:AddButton({
 })
 
 -- ═══════════════════════════════════════════════════════════════
--- TAB: SETTINGS & MISC
+-- TAB: ESP
 -- ═══════════════════════════════════════════════════════════════
-local SetTab = Window:AddTab({ Name = "Settings", Icon = "settings-2" })
-local SetL   = SetTab:AddLeftGroupbox("Config System")
-local SetR   = SetTab:AddRightGroupbox("Misc")
+local ESPTab = Window:AddTab({ Name = "ESP", Icon = "eye" })
+local ESPL   = ESPTab:AddLeftGroupbox("Visuals")
 
--- Config save/load system
-SetL:AddInput("ConfigName", {
-    Text = "Config Name",
-    Default = "default",
+ESPL:AddToggle("BallESP", {
+    Text = "Ball ESP", Default = false,
     Callback = function(v)
-        if v and v ~= "" then
-            Flags.ConfigName = v
+        Flags.BallESP = v
+        if not v then
+            for key in pairs(ESPObjects) do
+                if type(key) == "string" and key:sub(1,5) == "ball_" then removeESP(key) end
+            end
         end
-    end
+    end,
 })
 
-local function getConfigName()
-    local name = Flags.ConfigName
-    if not name or name == "" then name = "default" end
-    return "GymBasketballOP_" .. name .. ".json"
-end
+ESPL:AddToggle("PlayerESP", {
+    Text = "Player ESP (blue=ally, red=enemy)", Default = false,
+    Callback = function(v)
+        Flags.PlayerESP = v
+        if not v then
+            for key in pairs(ESPObjects) do
+                if type(key) == "string" and key:sub(1,4) == "plr_" then removeESP(key) end
+            end
+        end
+    end,
+})
 
-local function saveConfig()
-    local ConfigFile = getConfigName()
+-- ═══════════════════════════════════════════════════════════════
+-- TAB: SPOOFER
+-- ═══════════════════════════════════════════════════════════════
+local SpoofTab = Window:AddTab({ Name = "Spoofer", Icon = "user" })
+local SpoofL   = SpoofTab:AddLeftGroupbox("Identity")
+
+SpoofL:AddToggle("SpoofName", { Text = "Spoof Name", Default = false, Callback = function(v) Flags.SpoofName = v end })
+SpoofL:AddInput("SpoofedName", { Text = "Display Name", Default = "Solo on top", Callback = function(v) if v and #v > 0 then Flags.SpoofedName = v end end })
+SpoofL:AddToggle("SpoofOVR", { Text = "Spoof OVR", Default = false, Callback = function(v) Flags.SpoofOVR = v end })
+SpoofL:AddSlider("SpoofedOVR", { Text = "OVR Value", Min = 60, Max = 99, Default = 990, Suffix = " OVR", Callback = function(v) Flags.SpoofedOVR = v end })
+
+-- ═══════════════════════════════════════════════════════════════
+-- TAB: SETTINGS
+-- ═══════════════════════════════════════════════════════════════
+local SetTab = Window:AddTab({ Name = "Settings", Icon = "settings-2" })
+local SetL   = SetTab:AddLeftGroupbox("Config")
+local SetR   = SetTab:AddRightGroupbox("Auto Load")
+
+local ConfigFile = "GymBasketballOP_Config.json"
+
+local function saveConfig(name)
     local config = {
         Flags = {},
         HoldTimes = HoldTimes,
         SavedSpots = {},
     }
-    
     for k, v in pairs(Flags) do
         if type(v) == "boolean" or type(v) == "number" or type(v) == "string" then
             config.Flags[k] = v
         end
     end
-    
     for k, v in pairs(SavedSpots) do
         config.SavedSpots[k] = {
             position = {v.position.X, v.position.Y, v.position.Z},
@@ -1070,7 +1153,6 @@ local function saveConfig()
             distance = v.distance,
         }
     end
-    
     local json = game:GetService("HttpService"):JSONEncode(config)
     if writefile then
         writefile(ConfigFile, json)
@@ -1078,10 +1160,9 @@ local function saveConfig()
     end
 end
 
-local function loadConfig(fileNameOverride)
-    local ConfigFile = fileNameOverride or getConfigName()
+local function loadConfig(name)
     if not isfile or not isfile(ConfigFile) then
-        Library:Notify({ Title = "Config", Description = "No config found for: " .. ConfigFile, Duration = 3 })
+        Library:Notify({ Title = "Config", Description = "No config file found.", Duration = 3 })
         return
     end
     local json = readfile(ConfigFile)
@@ -1111,46 +1192,53 @@ local function loadConfig(fileNameOverride)
             end
         end
     end
-    Library:Notify({ Title = "Config", Description = "Loaded " .. ConfigFile, Duration = 3 })
+    Library:Notify({ Title = "Config", Description = "Config loaded.", Duration = 3 })
 end
 
 SetL:AddButton({
-    Text = "Save Current Config",
-    Func = function() saveConfig() end,
+    Text = "Save Config",
+    Func = function() saveConfig("default") end,
 })
 
 SetL:AddButton({
     Text = "Load Config",
-    Func = function() loadConfig() end,
+    Func = function() loadConfig("default") end,
 })
 
 SetL:AddButton({
     Text = "Delete Config",
     Func = function()
-        local ConfigFile = getConfigName()
         if delfile and isfile and isfile(ConfigFile) then
             delfile(ConfigFile)
-            Library:Notify({ Title = "Config", Description = "Deleted " .. ConfigFile, Duration = 3 })
+            Library:Notify({ Title = "Config", Description = "Config deleted.", Duration = 3 })
         end
     end,
 })
 
-SetL:AddButton({
-    Text = "Set Config as Auto-Load",
-    Func = function()
-        if writefile then
-            local name = Flags.ConfigName
-            if not name or name == "" then name = "default" end
-            writefile("GymBasketballOP_Autoload.txt", name)
-            Library:Notify({ Title = "Auto-Load", Description = name .. " will now automatically load on execution.", Duration = 4 })
+SetL:AddLabel({ Text = "Config saves: toggles, timings, spots", Size = 12 })
+
+SetR:AddToggle("AutoLoad", {
+    Text    = "Auto Load Config on Start",
+    Default = false,
+    Tooltip = "Automatically loads your saved config when the script runs.",
+    Callback = function(v)
+        Flags.AutoLoad = v
+        if v then
+            loadConfig("default")
         end
     end,
 })
 
+SetR:AddLabel({ Text = "Auto Load will restore your", Size = 12 })
+SetR:AddLabel({ Text = "last saved config automatically.", Size = 12 })
 
-SetR:AddToggle("AntiAFK", { Text = "Anti-AFK", Default = true, Callback = function(v) Flags.AntiAFK = v end })
+-- ═══════════════════════════════════════════════════════════════
+local MiscTab = Window:AddTab({ Name = "Misc", Icon = "settings" })
+local MiscBox = MiscTab:AddLeftGroupbox("Misc")
 
-SetR:AddButton({
+MiscBox:AddToggle("AntiAFK", { Text = "Anti-AFK", Default = true, Callback = function(v) Flags.AntiAFK = v end })
+
+MiscBox:AddButton({
     Text = "Server Hop",
     Func = function()
         local ok, servers = pcall(function()
@@ -1181,6 +1269,7 @@ end)
 Player.CharacterAdded:Connect(function(char)
     task.wait(1.5)
     if Flags.TPAntiContest then setupTPForChar(char) end
+    if Flags.SpoofName or Flags.SpoofOVR then task.wait(1); applySpoofs() end
     if Flags.InfiniteStamina then
         if Conns.Stamina then Conns.Stamina:Disconnect() end
         Conns.Stamina = RunService.Heartbeat:Connect(function()
@@ -1195,16 +1284,9 @@ task.spawn(function()
     task.wait(2)
     unstickChar()
 
-    -- Automatically retrieve and load the prioritized config file if set
-    if isfile and isfile("GymBasketballOP_Autoload.txt") then
-        local autoName = readfile("GymBasketballOP_Autoload.txt")
-        if autoName and autoName ~= "" then
-            local autoFile = "GymBasketballOP_" .. autoName .. ".json"
-            if isfile(autoFile) then
-                loadConfig(autoFile)
-                Flags.ConfigName = autoName
-            end
-        end
+    if isfile and isfile("GymBasketballOP_Config.json") then
+        loadConfig("default")
+        Flags.AutoLoad = true
     end
 
     Library:Notify({
