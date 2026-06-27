@@ -261,9 +261,9 @@ local function getLooseBall()
             end
             if not held then
                 local ballToHoop = (obj.Position - hoopPos).Magnitude
-                if ballToHoop > 60 then continue end
+                if ballToHoop > 120 then continue end -- Expanded from 60 for better court-wide detection
                 local d = (obj.Position - root.Position).Magnitude
-                if math.abs(obj.Position.Y - root.Position.Y) > 20 or d > 50 then continue end
+                if math.abs(obj.Position.Y - root.Position.Y) > 30 or d > 200 then continue end -- Expanded from 20 and 50 to grab balls further away
                 if d < dist then dist = d; nearest = obj end
             end
         end
@@ -586,12 +586,13 @@ local function ToggleAutoFarm(v)
                     local looseBall = getLooseBall()
                     if looseBall then
                         if Flags.FastTP then
-                            fastTP(looseBall.Position, false)
+                            -- Added a small Y offset so the character falls onto the ball, instantly triggering pickup
+                            fastTP(looseBall.Position + Vector3.new(0, 1, 0), false)
                         else
                             local hum = getHum(c)
                             if hum then hum:MoveTo(looseBall.Position) end
                         end
-                        task.wait(0.3)
+                        task.wait(0.05) -- Massively reduced from 0.3 to make ball retrieval lightning fast
                     end
                 end
             end
