@@ -1,5 +1,5 @@
 -- ═══════════════════════════════════════════════════════════════
--- GYM BASKETBALL OP v8.10 - Queue Fixed Edition
+-- GYM BASKETBALL OP v8.11 - Queue Logic Fix
 -- Auto Farm + Defense + Queue | Config System
 -- ═══════════════════════════════════════════════════════════════
 
@@ -314,7 +314,6 @@ local function get1v1Spot()
         if mapSpots and mapSpots:FindFirstChild("1v1") then return mapSpots["1v1"] end
     end
 
-    -- Dynamically search for the button based on prompt text
     for _, obj in pairs(workspace:GetDescendants()) do
         if obj:IsA("ProximityPrompt") then
             local txt = string.lower(obj.ActionText .. " " .. obj.ObjectText)
@@ -612,7 +611,6 @@ local function ToggleAutoMatch(v)
     Flags.AutoMatch = v
     if v and GetGameState().IsLobby then
         task.spawn(function()
-            local inQueueWait = false
             local lastQueueAttempt = 0
 
             while Flags.AutoMatch do
@@ -620,13 +618,13 @@ local function ToggleAutoMatch(v)
                 local c = Player.Character
                 local root = getRoot(c)
 
-                if not c or not root then inQueueWait = false; continue end
-                if isActuallyPlaying(c) then inQueueWait = false; continue end
+                if not c or not root then continue end
+                if isActuallyPlaying(c) then continue end
                 if tick() - outGameStamp < 4 then continue end
-                if c:GetAttribute("Queued") or c:GetAttribute("InQueue") or c:GetAttribute("State") == "Queue" then
-                    inQueueWait = true
-                end
-                if inQueueWait then continue end
+                
+                -- Check dynamic queue status on every loop iteration
+                local isQueued = c:GetAttribute("Queued") or c:GetAttribute("InQueue") or (c:GetAttribute("State") == "Queue")
+                if isQueued then continue end -- Skips execution if currently in the queue
 
                 local spot = get1v1Spot()
                 if spot and (tick() - lastQueueAttempt > 5) then
@@ -641,7 +639,6 @@ local function ToggleAutoMatch(v)
 
                     task.wait(0.5)
                     
-                    -- Physically trigger any ProximityPrompts for queueing
                     for _, prompt in pairs(workspace:GetDescendants()) do
                         if prompt:IsA("ProximityPrompt") and prompt.Parent then
                             if (prompt.Parent.Position - root.Position).Magnitude < 15 then
@@ -650,14 +647,12 @@ local function ToggleAutoMatch(v)
                         end
                     end
 
-                    -- Fire remote just in case physical prompt isn't solely relied upon
                     pcall(function()
                         local q = ReplicatedStorage:FindFirstChild("Queue")
                         if q then q:FireServer({ JoinQueue = true }) end
                     end)
                     
                     lastQueueAttempt = tick()
-                    inQueueWait = true
                 end
             end
         end)
@@ -1059,4 +1054,4 @@ task.spawn(function()
     end
 end)
 
-Library:Notify({ Title = "Gym Basketball OP v8.10", Description = "LCtrl to toggle UI.", Duration = 5 })
+Library:Notify({ Title = "Gym Basketball OP v8.11", Description = "LCtrl to toggle UI.", Duration = 5 })
